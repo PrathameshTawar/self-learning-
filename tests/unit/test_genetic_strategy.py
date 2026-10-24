@@ -7,7 +7,6 @@ import pytest
 from evoagent.learning.genetic import (
     GeneticStrategyMutator,
     PromptStyle,
-    RetrievalPolicy,
     StrategyChromosome,
 )
 from evoagent.learning.registry import StrategyRegistry
