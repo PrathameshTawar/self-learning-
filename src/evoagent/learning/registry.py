@@ -1,9 +1,9 @@
 """
-Versioned strategy policy registry with promotion gates and rollback support.
+Versioned strategy policy registry with statistical promotion gates and rollback support.
 """
 
-import json
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from evoagent.learning.genetic import StrategyChromosome
@@ -12,7 +12,8 @@ from evoagent.learning.genetic import StrategyChromosome
 class StrategyRegistry:
     """
     Registry for managing versioned strategy policies.
-    Guarantees that strategies are only promoted with verified benchmark evidence.
+    Guarantees that strategies are only promoted with verified, statistically meaningful
+    benchmark evidence over the currently active baseline strategy.
     """
 
     def __init__(self, registry_file: Path) -> None:
@@ -41,9 +42,27 @@ class StrategyRegistry:
         self,
         chromosome: StrategyChromosome,
         benchmark_evidence: Dict[str, Any],
+        min_fitness_margin: float = 0.05,
+        force: bool = False,
     ) -> str:
-        """Promote an evolved strategy policy with proof of held-out benchmark superiority."""
+        """
+        Promote an evolved strategy policy.
+        Requires candidate strategy to demonstrate a statistically meaningful improvement
+        (default >= 0.05 fitness margin) over the currently active strategy unless forced.
+        """
         data = self._read_data()
+        current_active = self.get_active_strategy()
+
+        if not force and current_active and len(data.get("versions", [])) > 0:
+            cand_fitness = chromosome.fitness_score
+            curr_fitness = current_active.fitness_score
+            if cand_fitness < (curr_fitness + min_fitness_margin):
+                raise ValueError(
+                    f"Promotion gate rejected strategy '{chromosome.strategy_id}': "
+                    f"candidate fitness {cand_fitness:.4f} did not exceed current baseline "
+                    f"{curr_fitness:.4f} by required margin of {min_fitness_margin:.2f}"
+                )
+
         version_id = f"v{len(data.get('versions', [])) + 1}"
 
         record = {
