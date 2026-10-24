@@ -23,10 +23,12 @@ class BenchmarkMetricsCalculator:
         if total_tasks == 0:
             return {
                 "total_tasks": 0,
-                "resolution_rate": 0.0,
-                "regression_free_rate": 0.0,
-                "patch_validity_rate": 0.0,
-                "retry_recovery_rate": 0.0,
+                "resolved_tasks": 0,
+                "resolution_rate_percent": 0.0,
+                "regression_free_rate_percent": 100.0,
+                "patch_validity_rate_percent": 0.0,
+                "retry_recovery_rate_percent": 0.0,
+                "average_attempts_per_task": 0.0,
                 "average_duration_seconds": 0.0,
             }
 
@@ -42,6 +44,7 @@ class BenchmarkMetricsCalculator:
         recovered_on_retry = 0
 
         total_duration = sum(r.total_duration_seconds for r in results)
+        total_attempts = sum(max(1, len(r.attempts)) for r in results)
 
         for res in results:
             # Check retry recovery
@@ -83,5 +86,6 @@ class BenchmarkMetricsCalculator:
             "regression_free_rate_percent": round(regression_free_rate, 2),
             "patch_validity_rate_percent": round(patch_validity_rate, 2),
             "retry_recovery_rate_percent": round(retry_recovery_rate, 2),
+            "average_attempts_per_task": round(total_attempts / total_tasks, 2),
             "average_duration_seconds": round(total_duration / total_tasks, 2),
         }
