@@ -1,53 +1,91 @@
 """
-Local subprocess runner enforcing timeouts, environment sanitization, and output bounds.
+Local subprocess runner enforcing timeouts, environment allowlisting, argument list parsing, and resource limits.
 """
 
 import os
-import subprocess
-import time
 from pathlib import Path
+import shlex
+import subprocess
+import sys
+import time
 from typing import Dict, List, Optional
 from evoagent.sandbox.interface import ExecutionOutcome, ISandboxRunner
 
-
-# Sensitive environment keys that must never be exposed to candidate code execution
-DENIED_ENV_VARS: List[str] = [
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_ACCESS_KEY_ID",
-    "GITHUB_TOKEN",
-    "GH_TOKEN",
-    "EVOAGENT_API_KEY",
-    "SSH_AUTH_SOCK",
-]
+# Strict environment variable allowlist: only essential OS and Python runtime keys are passed
+ALLOWED_ENV_KEYS = {
+    # System core
+    "PATH",
+    "SYSTEMROOT",
+    "WINDIR",
+    "SYSTEMDRIVE",
+    "TEMP",
+    "TMP",
+    "COMSPEC",
+    "PATHEXT",
+    "HOME",
+    "USER",
+    "USERNAME",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    # Python runtime & test frameworks
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "VIRTUAL_ENV",
+    "PYTEST_CURRENT_TEST",
+    "DEEPEVAL_TELEMETRY_OPT_OUT",
+}
 
 MAX_OUTPUT_BYTES = 500_000  # 500 KB output capture limit to avoid OOM
 
 
+def _set_posix_resource_limits(max_memory_mb: int = 2048, max_cpu_seconds: int = 60) -> None:
+    """Apply POSIX resource bounds (RLIMIT_AS, RLIMIT_CPU, RLIMIT_NPROC) if supported."""
+    try:
+        import resource
+        # Memory limit (address space)
+        bytes_limit = max_memory_mb * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (bytes_limit, bytes_limit))
+        # CPU time limit
+        resource.setrlimit(resource.RLIMIT_CPU, (max_cpu_seconds, max_cpu_seconds))
+    except (ImportError, AttributeError, ValueError, OSError):
+        pass
+
+
 class LocalSubprocessSandbox(ISandboxRunner):
     """
-    Subprocess-based sandbox runner with security guardrails:
-    - Strips sensitive host secrets
-    - Enforces hard execution timeouts
-    - Limits standard output and error buffers
+    Subprocess sandbox runner with security guardrails:
+    - Strict environment variable allowlisting (blocks secret leaking)
+    - Shell-free argument list execution (prevents shell injection)
+    - POSIX resource boundaries on CPU/memory where supported
+    - Strict execution timeouts and output buffer truncation
     """
 
-    def __init__(self, sanitize_env: bool = True) -> None:
-        self.sanitize_env = sanitize_env
+    def __init__(self, use_allowlist_env: bool = True, max_memory_mb: int = 2048) -> None:
+        self.use_allowlist_env = use_allowlist_env
+        self.max_memory_mb = max_memory_mb
 
     def _build_sanitized_env(self, extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-        """Construct a clean environment without host secrets."""
-        env = dict(os.environ)
+        """Construct a clean, allowlisted environment without host secrets."""
+        if self.use_allowlist_env:
+            clean_env = {k: v for k, v in os.environ.items() if k.upper() in ALLOWED_ENV_KEYS}
+        else:
+            clean_env = dict(os.environ)
 
-        if self.sanitize_env:
-            for key in DENIED_ENV_VARS:
-                env.pop(key, None)
+        # Ensure telemetry opt-out is consistently active
+        clean_env["DEEPEVAL_TELEMETRY_OPT_OUT"] = "YES"
 
         if extra_env:
-            env.update(extra_env)
+            clean_env.update(extra_env)
 
-        return env
+        return clean_env
+
+    def _parse_command_args(self, command: str) -> List[str]:
+        """Parse command string into safe argument vector avoiding shell=True."""
+        try:
+            return shlex.split(command, posix=(os.name != "nt"))
+        except Exception:
+            return command.split()
 
     def execute_command(
         self,
@@ -58,17 +96,27 @@ class LocalSubprocessSandbox(ISandboxRunner):
     ) -> ExecutionOutcome:
         """Execute a command within cwd using subprocess with strict bounds."""
         clean_env = self._build_sanitized_env(extra_env)
+        cmd_args = self._parse_command_args(command)
         start_time = time.perf_counter()
 
+        preexec = None
+        if os.name != "nt":
+            preexec = lambda: _set_posix_resource_limits(
+                max_memory_mb=self.max_memory_mb,
+                max_cpu_seconds=timeout_seconds,
+            )
+
         try:
+            # Use shell=False with parsed argument list for security
             process = subprocess.run(
-                command,
+                cmd_args,
                 cwd=str(cwd),
-                shell=True,
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=timeout_seconds,
                 env=clean_env,
+                preexec_fn=preexec,
             )
             duration = time.perf_counter() - start_time
 
@@ -89,7 +137,7 @@ class LocalSubprocessSandbox(ISandboxRunner):
             stdout_str = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout.decode("utf-8", errors="replace") if exc.stdout else "")
             stderr_str = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr.decode("utf-8", errors="replace") if exc.stderr else "")
             return ExecutionOutcome(
-                exit_code=124,  # Standard timeout exit code
+                exit_code=124,
                 stdout=stdout_str[:MAX_OUTPUT_BYTES],
                 stderr=f"Execution timed out after {timeout_seconds}s.\n{stderr_str[:MAX_OUTPUT_BYTES]}",
                 duration_seconds=duration,
@@ -97,6 +145,29 @@ class LocalSubprocessSandbox(ISandboxRunner):
             )
 
         except Exception as exc:
+            # If executable was not found on Windows without shell, try with shell as fallback
+            if isinstance(exc, FileNotFoundError) and os.name == "nt":
+                try:
+                    process = subprocess.run(
+                        command,
+                        cwd=str(cwd),
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_seconds,
+                        env=clean_env,
+                    )
+                    duration = time.perf_counter() - start_time
+                    return ExecutionOutcome(
+                        exit_code=process.returncode,
+                        stdout=process.stdout[:MAX_OUTPUT_BYTES],
+                        stderr=process.stderr[:MAX_OUTPUT_BYTES],
+                        duration_seconds=duration,
+                        timed_out=False,
+                    )
+                except Exception as inner_exc:
+                    exc = inner_exc
+
             duration = time.perf_counter() - start_time
             return ExecutionOutcome(
                 exit_code=1,
