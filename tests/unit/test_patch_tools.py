@@ -1,5 +1,5 @@
 """
-Unit tests for PatchTool validation, hunk application, and path security.
+Unit tests for PatchTool validation, hunk application, SEARCH/REPLACE blocks, and path security.
 """
 
 from pathlib import Path
@@ -58,3 +58,66 @@ def test_apply_unified_diff_success(tmp_path: Path):
     success, msg = tool.apply_unified_diff(patch)
     assert success
     assert "good" in code_file.read_text(encoding="utf-8")
+
+
+def test_apply_search_replace_block_success(tmp_path: Path):
+    code_file = tmp_path / "service.py"
+    code_file.write_text(
+        "def compute(a, b):\n"
+        "    return a / b\n",
+        encoding="utf-8",
+    )
+
+    tool = PatchTool(root_path=tmp_path)
+    sr_block = (
+        "<<<<<<< SEARCH\n"
+        "def compute(a, b):\n"
+        "    return a / b\n"
+        "=======\n"
+        "def compute(a, b):\n"
+        "    if b == 0:\n"
+        "        return 0.0\n"
+        "    return a / b\n"
+        ">>>>>>> REPLACE"
+    )
+    patch = PatchProposal(target_file="service.py", diff_unified=sr_block)
+
+    is_valid, err = tool.validate_patch(patch)
+    assert is_valid, err
+
+    success, msg = tool.apply_unified_diff(patch)
+    assert success, msg
+    updated_content = code_file.read_text(encoding="utf-8")
+    assert "if b == 0:" in updated_content
+    assert "return 0.0" in updated_content
+
+
+def test_apply_search_replace_multiple_blocks(tmp_path: Path):
+    code_file = tmp_path / "calc.py"
+    code_file.write_text(
+        "x = 10\n"
+        "y = 20\n"
+        "z = 30\n",
+        encoding="utf-8",
+    )
+
+    tool = PatchTool(root_path=tmp_path)
+    sr_blocks = (
+        "<<<<<<< SEARCH\n"
+        "x = 10\n"
+        "=======\n"
+        "x = 100\n"
+        ">>>>>>> REPLACE\n"
+        "<<<<<<< SEARCH\n"
+        "z = 30\n"
+        "=======\n"
+        "z = 300\n"
+        ">>>>>>> REPLACE"
+    )
+    patch = PatchProposal(target_file="calc.py", diff_unified=sr_blocks)
+    success, msg = tool.apply_unified_diff(patch)
+    assert success, msg
+    updated = code_file.read_text(encoding="utf-8")
+    assert "x = 100" in updated
+    assert "y = 20" in updated
+    assert "z = 300" in updated
