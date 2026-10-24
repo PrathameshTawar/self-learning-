@@ -82,7 +82,7 @@ def run_benchmark_suite(benchmark_root: Path, memory_db_path: Path) -> None:
             metadata=data.get("metadata", {}),
         )
 
-        console.print(f"▶ Executing task: [cyan]{task_obj.task_id}[/] ... ", end="")
+        console.print(f"[>] Executing task: [cyan]{task_obj.task_id}[/] ... ", end="")
         res = sm.execute_task(task_obj)
         results.append(res)
 
@@ -100,9 +100,9 @@ def run_benchmark_suite(benchmark_root: Path, memory_db_path: Path) -> None:
     table.add_column("Engineering Target", style="green")
 
     table.add_row("Total Tasks", str(metrics["total_tasks"]), "N/A")
-    table.add_row("Task Resolution Rate", f"{metrics['resolution_rate_percent']}%", "≥ 50%")
-    table.add_row("Regression-Free Rate", f"{metrics['regression_free_rate_percent']}%", "≥ 95%")
-    table.add_row("Patch Validity Rate", f"{metrics['patch_validity_rate_percent']}%", "≥ 95%")
+    table.add_row("Task Resolution Rate", f"{metrics['resolution_rate_percent']}%", ">= 50%")
+    table.add_row("Regression-Free Rate", f"{metrics['regression_free_rate_percent']}%", ">= 95%")
+    table.add_row("Patch Validity Rate", f"{metrics['patch_validity_rate_percent']}%", ">= 95%")
     table.add_row("Avg Task Duration", f"{metrics['average_duration_seconds']}s", "< 30s")
 
     console.print("\n", table)
