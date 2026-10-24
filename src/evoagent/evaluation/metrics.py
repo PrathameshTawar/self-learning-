@@ -10,7 +10,8 @@ class BenchmarkMetricsCalculator:
     """
     Computes rigorous metrics defined in EvoAgent benchmark specifications:
     - Task Resolution Rate (>= 50% target)
-    - Regression-Free Rate (>= 95% target)
+    - Regression-Free Rate (>= 95% target): share of candidate patches that passed their
+      targeted test without breaking the regression suite (0.0 when no candidate got that far)
     - Patch Validity Rate (>= 95% target)
     - Retry Recovery Rate
     - Memory Improvement Difference
@@ -25,7 +26,8 @@ class BenchmarkMetricsCalculator:
                 "total_tasks": 0,
                 "resolved_tasks": 0,
                 "resolution_rate_percent": 0.0,
-                "regression_free_rate_percent": 100.0,
+                "regression_free_rate_percent": 0.0,
+                "targeted_pass_candidates": 0,
                 "patch_validity_rate_percent": 0.0,
                 "retry_recovery_rate_percent": 0.0,
                 "average_attempts_per_task": 0.0,
@@ -37,8 +39,8 @@ class BenchmarkMetricsCalculator:
 
         total_patches_generated = 0
         valid_patches_count = 0
+        targeted_pass_count = 0
         regression_passed_count = 0
-        accepted_count = 0
 
         retryable_initial_failures = 0
         recovered_on_retry = 0
@@ -58,8 +60,10 @@ class BenchmarkMetricsCalculator:
                     total_patches_generated += 1
                     if att.patch.is_valid_format:
                         valid_patches_count += 1
-                if att.evaluation and att.evaluation.is_accepted:
-                    accepted_count += 1
+                # Accepted patches always passed regression, so measure over every candidate that
+                # fixed the targeted test; otherwise the rate is 100% by construction
+                if att.evaluation and att.evaluation.targeted_tests_passed:
+                    targeted_pass_count += 1
                     if att.evaluation.regression_tests_passed:
                         regression_passed_count += 1
 
@@ -69,9 +73,9 @@ class BenchmarkMetricsCalculator:
             else 0.0
         )
         regression_free_rate = (
-            (regression_passed_count / accepted_count * 100.0)
-            if accepted_count > 0
-            else 100.0
+            (regression_passed_count / targeted_pass_count * 100.0)
+            if targeted_pass_count > 0
+            else 0.0
         )
         retry_recovery_rate = (
             (recovered_on_retry / retryable_initial_failures * 100.0)
@@ -84,6 +88,7 @@ class BenchmarkMetricsCalculator:
             "resolved_tasks": resolved_count,
             "resolution_rate_percent": round(resolution_rate, 2),
             "regression_free_rate_percent": round(regression_free_rate, 2),
+            "targeted_pass_candidates": targeted_pass_count,
             "patch_validity_rate_percent": round(patch_validity_rate, 2),
             "retry_recovery_rate_percent": round(retry_recovery_rate, 2),
             "average_attempts_per_task": round(total_attempts / total_tasks, 2),
