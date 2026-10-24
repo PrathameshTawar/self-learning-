@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
   fetchMetrics();
   fetchEpisodes();
   fetchDataset();
+  fetchExperiments();
 
   const runBtn = document.getElementById("run-task-btn");
   if (runBtn) {
@@ -44,13 +45,47 @@ async function fetchMetrics() {
     if (!res.ok) return;
     const data = await res.json();
 
-    document.getElementById("metric-resolution").innerText = `${data.resolution_rate_percent}%`;
-    document.getElementById("metric-regression").innerText = `${data.regression_free_rate_percent}%`;
-    document.getElementById("metric-validity").innerText = `${data.patch_validity_rate_percent}%`;
-    document.getElementById("metric-duration").innerText = `${data.average_duration_seconds}s`;
-    document.getElementById("metric-total-tasks").innerText = data.total_tasks || 1;
+    document.getElementById("metric-resolution").innerText = formatMetric(data.resolution_rate_percent, "%");
+    document.getElementById("metric-regression").innerText = formatMetric(data.regression_free_rate_percent, "%");
+    document.getElementById("metric-validity").innerText = formatMetric(data.patch_validity_rate_percent, "%");
+    document.getElementById("metric-duration").innerText = formatMetric(data.average_duration_seconds, "s");
   } catch (err) {
     console.error("Failed to fetch metrics:", err);
+  }
+}
+
+// Metrics the server could not measure come back as null
+function formatMetric(value, suffix) {
+  return value === null || value === undefined ? "n/a" : `${value}${suffix}`;
+}
+
+// Fetch held-out ablation results written by benchmarks/run_benchmarks.py --eval-comparison
+async function fetchExperiments() {
+  try {
+    const res = await fetch("/api/experiments");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.conditions || data.conditions.length === 0) return;
+
+    const meta = document.getElementById("experiments-meta");
+    if (meta) meta.innerText = `${data.model} • ${data.generated_at.slice(0, 10)}`;
+
+    const tbody = document.getElementById("experiments-table-body");
+    tbody.innerHTML = "";
+    data.conditions.forEach((cond) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td style="font-family: var(--font-mono); font-weight: 600; color: #818cf8;">${escapeHtml(cond.id)}</td>
+        <td>${escapeHtml(cond.name)}</td>
+        <td>${formatMetric(cond.resolution_rate_percent, "%")}</td>
+        <td>${formatMetric(cond.regression_free_rate_percent, "%")}</td>
+        <td>${formatMetric(cond.average_attempts_per_task, "")}</td>
+        <td>${formatMetric(cond.average_duration_seconds, "s")}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  } catch (err) {
+    console.error("Failed to fetch experiments:", err);
   }
 }
 
@@ -145,7 +180,7 @@ async function fetchDataset() {
   }
 }
 
-// Trigger autonomous task execution with stepper animation
+// Trigger autonomous task execution and print the attempts the server actually ran
 async function runAutonomousTask() {
   const btn = document.getElementById("run-task-btn");
   const term = document.getElementById("terminal-output");
@@ -154,51 +189,32 @@ async function runAutonomousTask() {
   btn.disabled = true;
   btn.innerHTML = `<span class="pulse-dot"></span> Executing Repair Loop...`;
 
-  term.innerHTML = `[+] Initiating task: bug-001-parser\n[+] Reading code context & failure signature...\n`;
-
-  // Animate pipeline nodes
+  term.innerHTML = `[+] Running repair loop for bug-001-parser in a throwaway workspace...\n`;
+  ["node-queued", "node-analyzing", "node-planned", "node-patching", "node-evaluating", "node-succeeded", "node-completed"]
+    .forEach((id) => setNodeState(id, ""));
   setNodeState("node-queued", "completed");
   setNodeState("node-analyzing", "active");
 
   try {
-    appendTerminal("[+] Locating target file parser.py...");
-    await sleep(600);
-
-    setNodeState("node-analyzing", "completed");
-    setNodeState("node-planned", "active");
-    appendTerminal("[+] Querying episodic memory store for IndexError patterns...");
-    appendTerminal("[+] Formulating hypothesis: Guard empty string/collection before index access.");
-    await sleep(600);
-
-    setNodeState("node-planned", "completed");
-    setNodeState("node-patching", "active");
-    appendTerminal("[+] Generating unified diff proposal with minimal footprint...");
-    await sleep(600);
-
-    setNodeState("node-patching", "completed");
-    setNodeState("node-evaluating", "active");
-    appendTerminal("[+] Dispatching to isolated execution sandbox...");
-    appendTerminal("[+] Running pre-patch regression check -> reproduced IndexError as expected.");
-
     const res = await fetch("/api/run-task", { method: "POST" });
     const data = await res.json();
 
+    (data.attempts || []).forEach((att) => {
+      appendTerminal(`[attempt ${att.attempt_number}] ${att.state}: ${att.hypothesis}`);
+      if (att.feedback) appendTerminal(`    ${att.feedback}`);
+    });
+
+    ["node-analyzing", "node-planned", "node-patching", "node-evaluating"].forEach((id) => setNodeState(id, "completed"));
     if (data.is_successful) {
-      setNodeState("node-evaluating", "completed");
       setNodeState("node-succeeded", "completed");
       setNodeState("node-completed", "completed");
-
-      appendTerminal("[+] Running post-patch targeted tests: PASSED!");
-      appendTerminal("[+] Running full regression test suite: PASSED!");
-      appendTerminal(`[SUCCESS] Task ${data.task_id} completed successfully in ${data.total_duration_seconds}s!`);
-      appendTerminal("[+] New experience episode recorded to SQLite memory store.");
+      appendTerminal(`[SUCCESS] Task ${data.task_id} reached ${data.final_state} in ${data.total_duration_seconds}s; episode saved to memory.`);
 
       if (data.accepted_patch && diffViewer) {
         diffViewer.innerHTML = renderDiffHtml(data.accepted_patch.diff_unified);
       }
     } else {
-      setNodeState("node-evaluating", "completed");
-      appendTerminal(`[FAIL] Task failed: ${data.message || 'Execution error'}`);
+      appendTerminal(`[FAIL] Task ended in ${data.final_state || "error"}: ${data.message || "no patch passed the evaluator"}`);
     }
 
     // Refresh state
@@ -265,8 +281,4 @@ function escapeHtml(text) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

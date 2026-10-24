@@ -244,6 +244,21 @@ class TaskStateMachine:
                 regression_tests_passed=bool(accepted_patch and last_attempt and last_attempt.evaluation and last_attempt.evaluation.regression_tests_passed),
                 lessons_learned=lessons,
                 strategy_id=strategy_id,
+                # Run telemetry so dashboards can report measured rates instead of constants
+                metadata={
+                    "duration_seconds": round(total_duration, 2),
+                    "attempts": len(attempts),
+                    "patches_generated": sum(1 for a in attempts if a.patch),
+                    "valid_patches": sum(1 for a in attempts if a.patch and a.patch.is_valid_format),
+                    "targeted_pass_candidates": sum(
+                        1 for a in attempts if a.evaluation and a.evaluation.targeted_tests_passed
+                    ),
+                    "regression_free_candidates": sum(
+                        1
+                        for a in attempts
+                        if a.evaluation and a.evaluation.targeted_tests_passed and a.evaluation.regression_tests_passed
+                    ),
+                },
             )
             if persist_episode:
                 self.memory_store.save_episode(episode)

@@ -6,7 +6,7 @@ import json
 import mimetypes
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 import webbrowser
 
 from evoagent.domain.models import ExecutionBudget, Task
@@ -14,6 +14,7 @@ from evoagent.evaluation.evaluator import IndependentEvaluator
 from evoagent.evaluation.metrics import BenchmarkMetricsCalculator
 from evoagent.learning.dataset import DatasetCurator
 from evoagent.memory.retrieval import ExperienceRetriever
+from evoagent.memory.schemas import MemoryEpisodeRecord
 from evoagent.memory.store import SQLiteMemoryStore
 from evoagent.models.heuristic_model import HeuristicCodingModel
 from evoagent.orchestration.planner import TaskPlanner
@@ -26,6 +27,31 @@ from evoagent.tools.test_tools import TestRunnerTool
 
 STATIC_DIR = Path(__file__).parent / "static"
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+
+
+def episode_metrics(episodes: List[MemoryEpisodeRecord]) -> Dict[str, Any]:
+    """Aggregate dashboard metrics from stored episodes; None where no episode carries the data."""
+
+    def pct(numerator: int, denominator: int) -> Optional[float]:
+        return round(numerator / denominator * 100.0, 2) if denominator else None
+
+    telemetry = [ep.metadata for ep in episodes if "duration_seconds" in ep.metadata]
+    accepted = sum(1 for ep in episodes if ep.outcome == "accepted")
+    return {
+        "total_tasks": len(episodes),
+        "resolution_rate_percent": pct(accepted, len(episodes)),
+        "regression_free_rate_percent": pct(
+            sum(m["regression_free_candidates"] for m in telemetry),
+            sum(m["targeted_pass_candidates"] for m in telemetry),
+        ),
+        "patch_validity_rate_percent": pct(
+            sum(m["valid_patches"] for m in telemetry),
+            sum(m["patches_generated"] for m in telemetry),
+        ),
+        "average_duration_seconds": (
+            round(sum(m["duration_seconds"] for m in telemetry) / len(telemetry), 2) if telemetry else None
+        ),
+    }
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -74,18 +100,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 db_file = PROJECT_ROOT / "data" / "evoagent_memory.db"
 
             store = SQLiteMemoryStore(db_file)
-            episodes = store.get_all_episodes(limit=50)
-            accepted = [e for e in episodes if e.outcome == "accepted"]
+            self._send_json(episode_metrics(store.get_all_episodes(limit=50)))
+            return
 
-            res_rate = 100.0 if episodes and accepted else 100.0
-            data = {
-                "total_tasks": max(1, len(episodes)),
-                "resolution_rate_percent": round(res_rate, 2),
-                "regression_free_rate_percent": 100.0,
-                "patch_validity_rate_percent": 100.0,
-                "average_duration_seconds": 2.27,
-            }
-            self._send_json(data)
+        if path == "/api/experiments":
+            # Written by `python benchmarks/run_benchmarks.py --eval-comparison`
+            results_file = PROJECT_ROOT / "data" / "ablation_results.json"
+            if results_file.exists():
+                self._send_json(json.loads(results_file.read_text(encoding="utf-8")))
+            else:
+                self._send_json({"conditions": []})
             return
 
         if path == "/api/episodes":
@@ -177,6 +201,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "is_successful": result.is_successful,
                 "final_state": result.final_state.value,
                 "total_duration_seconds": result.total_duration_seconds,
+                "attempts": [
+                    {
+                        "attempt_number": att.attempt_number,
+                        "state": att.state.value,
+                        "hypothesis": att.hypothesis or "",
+                        "feedback": (
+                            att.evaluation.feedback
+                            if att.evaluation
+                            else (att.patch.validation_error or "") if att.patch else ""
+                        ),
+                    }
+                    for att in result.attempts
+                ],
                 "accepted_patch": (
                     {
                         "target_file": result.accepted_patch.target_file,

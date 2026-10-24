@@ -198,3 +198,17 @@ def test_unrunnable_targeted_test_is_invalid_task(temp_repo: Path):
     assert "exit code 5" in result.attempts[0].hypothesis
     assert model.prompts == []
     assert store.get_all_episodes() == []
+
+
+def test_episode_records_run_telemetry(temp_repo: Path):
+    store = InMemoryMemoryStore()
+    model = RecordingModel([WRONG_FIX, GOOD_FIX])
+    _real_state_machine(temp_repo, model, store).execute_task(_parser_task(temp_repo))
+
+    telemetry = store.get_all_episodes()[0].metadata
+    assert telemetry["attempts"] == 2
+    assert telemetry["patches_generated"] == 2
+    assert telemetry["valid_patches"] == 2
+    assert telemetry["targeted_pass_candidates"] == 1
+    assert telemetry["regression_free_candidates"] == 1
+    assert telemetry["duration_seconds"] > 0
