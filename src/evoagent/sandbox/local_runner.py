@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
-import sys
 import time
 from typing import Dict, List, Optional
 from evoagent.sandbox.interface import ExecutionOutcome, ISandboxRunner
@@ -43,10 +42,8 @@ def _set_posix_resource_limits(max_memory_mb: int = 2048, max_cpu_seconds: int =
     """Apply POSIX resource bounds (RLIMIT_AS, RLIMIT_CPU, RLIMIT_NPROC) if supported."""
     try:
         import resource
-        # Memory limit (address space)
         bytes_limit = max_memory_mb * 1024 * 1024
         resource.setrlimit(resource.RLIMIT_AS, (bytes_limit, bytes_limit))
-        # CPU time limit
         resource.setrlimit(resource.RLIMIT_CPU, (max_cpu_seconds, max_cpu_seconds))
     except (ImportError, AttributeError, ValueError, OSError):
         pass
@@ -81,11 +78,12 @@ class LocalSubprocessSandbox(ISandboxRunner):
         return clean_env
 
     def _parse_command_args(self, command: str) -> List[str]:
-        """Parse command string into safe argument vector avoiding shell=True."""
+        """Parse command string into safe argument vector, stripping enclosing quotes."""
         try:
-            return shlex.split(command, posix=(os.name != "nt"))
+            tokens = shlex.split(command, posix=True)
+            return [t.strip('"\'') for t in tokens]
         except Exception:
-            return command.split()
+            return [t.strip('"\'') for t in command.split()]
 
     def execute_command(
         self,
@@ -107,7 +105,6 @@ class LocalSubprocessSandbox(ISandboxRunner):
             )
 
         try:
-            # Use shell=False with parsed argument list for security
             process = subprocess.run(
                 cmd_args,
                 cwd=str(cwd),
@@ -120,7 +117,6 @@ class LocalSubprocessSandbox(ISandboxRunner):
             )
             duration = time.perf_counter() - start_time
 
-            # Truncate output if larger than limit
             stdout = process.stdout[:MAX_OUTPUT_BYTES]
             stderr = process.stderr[:MAX_OUTPUT_BYTES]
 
@@ -144,9 +140,9 @@ class LocalSubprocessSandbox(ISandboxRunner):
                 timed_out=True,
             )
 
-        except Exception as exc:
-            # If executable was not found on Windows without shell, try with shell as fallback
-            if isinstance(exc, FileNotFoundError) and os.name == "nt":
+        except (FileNotFoundError, PermissionError) as exc:
+            # Fallback for Windows executables requiring shell resolution
+            if os.name == "nt":
                 try:
                     process = subprocess.run(
                         command,
@@ -168,6 +164,16 @@ class LocalSubprocessSandbox(ISandboxRunner):
                 except Exception as inner_exc:
                     exc = inner_exc
 
+            duration = time.perf_counter() - start_time
+            return ExecutionOutcome(
+                exit_code=1,
+                stdout="",
+                stderr=f"Sandbox execution failed: {str(exc)}",
+                duration_seconds=duration,
+                timed_out=False,
+            )
+
+        except Exception as exc:
             duration = time.perf_counter() - start_time
             return ExecutionOutcome(
                 exit_code=1,
