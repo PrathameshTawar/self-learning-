@@ -34,6 +34,8 @@ class EvolutionaryTournament:
                 prompt_style=PromptStyle.MINIMAL_DIFF,
                 retrieval_top_k=3,
                 retrieval_policy=RetrievalPolicy.SIGNATURE_MATCH,
+                max_patch_lines=150,
+                temperature=0.2,
                 enable_multi_file_context=True,
             ),
             StrategyChromosome(
@@ -41,6 +43,8 @@ class EvolutionaryTournament:
                 prompt_style=PromptStyle.DEFENSIVE_BOUNDARY,
                 retrieval_top_k=5,
                 retrieval_policy=RetrievalPolicy.BM25_SEMANTIC,
+                max_patch_lines=120,
+                temperature=0.1,
                 enable_multi_file_context=True,
             ),
             StrategyChromosome(
@@ -48,6 +52,8 @@ class EvolutionaryTournament:
                 prompt_style=PromptStyle.CHAIN_OF_THOUGHT,
                 retrieval_top_k=2,
                 retrieval_policy=RetrievalPolicy.ERROR_TYPE_ONLY,
+                max_patch_lines=180,
+                temperature=0.3,
                 enable_multi_file_context=False,
             ),
             StrategyChromosome(
@@ -55,21 +61,21 @@ class EvolutionaryTournament:
                 prompt_style=PromptStyle.HYPOTHESIS_FIRST,
                 retrieval_top_k=4,
                 retrieval_policy=RetrievalPolicy.SIGNATURE_MATCH,
+                max_patch_lines=200,
+                temperature=0.2,
                 enable_multi_file_context=True,
             ),
         ][: self.population_size]
 
     def run_generation(self, benchmark_tasks: List[Task], generation_idx: int) -> StrategyChromosome:
-        """Evaluate current population on benchmark tasks and compute fitness scores."""
+        """Evaluate current population on benchmark tasks with full gene wiring and compute fitness scores."""
         evaluated_chromosomes: List[Tuple[StrategyChromosome, Dict[str, Any]]] = []
 
         for chrom in self.population:
-            # Apply chromosome settings to state machine
-            self.state_machine.patch_tool.max_patch_lines = chrom.max_patch_lines
-
             results: List[TaskResult] = []
             for t in benchmark_tasks:
-                res = self.state_machine.execute_task(t)
+                # Fully pass chromosome to execute_task so all genes are active
+                res = self.state_machine.execute_task(t, strategy=chrom)
                 results.append(res)
 
             metrics = BenchmarkMetricsCalculator.calculate_metrics(results)
@@ -91,6 +97,9 @@ class EvolutionaryTournament:
             "champion_id": champion.strategy_id,
             "best_fitness": champion.fitness_score,
             "prompt_style": champion.prompt_style.value,
+            "retrieval_policy": champion.retrieval_policy.value,
+            "temperature": champion.temperature,
+            "enable_multi_file_context": champion.enable_multi_file_context,
             "population_fitnesses": [c[0].fitness_score for c in evaluated_chromosomes],
         })
 
