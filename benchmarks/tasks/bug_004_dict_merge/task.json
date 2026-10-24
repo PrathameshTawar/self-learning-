@@ -1,0 +1,13 @@
+{
+  "task_id": "bug-004-dict-merge",
+  "repo_dir": "code",
+  "issue_description": "deep_merge_config raises AttributeError when overriding nested dictionary with None or primitive",
+  "targeted_test": "tests/test_merger.py -k test_deep_merge_with_none_override",
+  "regression_test": "tests/test_merger.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "merger.py",
+    "failure_type": "AttributeError"
+  }
+}
