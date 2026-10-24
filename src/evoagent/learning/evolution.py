@@ -67,24 +67,28 @@ class EvolutionaryTournament:
             ),
         ][: self.population_size]
 
+    def evaluate_strategy(self, chrom: StrategyChromosome, tasks: List[Task]) -> Dict[str, Any]:
+        """Run every task with all of chrom's genes active, set its fitness, and return the metrics."""
+        results: List[TaskResult] = []
+        for t in tasks:
+            # Frozen memory: episodes written while evaluating one chromosome must not help the
+            # next one, or fitness would depend on evaluation order
+            results.append(self.state_machine.execute_task(t, strategy=chrom, persist_episode=False))
+
+        metrics = BenchmarkMetricsCalculator.calculate_metrics(results)
+        chrom.compute_fitness(
+            resolution_rate=metrics["resolution_rate_percent"],
+            regression_free_rate=metrics["regression_free_rate_percent"],
+            avg_duration_seconds=metrics["average_duration_seconds"],
+        )
+        return metrics
+
     def run_generation(self, benchmark_tasks: List[Task], generation_idx: int) -> StrategyChromosome:
         """Evaluate current population on benchmark tasks with full gene wiring and compute fitness scores."""
         evaluated_chromosomes: List[Tuple[StrategyChromosome, Dict[str, Any]]] = []
 
         for chrom in self.population:
-            results: List[TaskResult] = []
-            for t in benchmark_tasks:
-                # Fully pass chromosome to execute_task so all genes are active
-                res = self.state_machine.execute_task(t, strategy=chrom)
-                results.append(res)
-
-            metrics = BenchmarkMetricsCalculator.calculate_metrics(results)
-            chrom.compute_fitness(
-                resolution_rate=metrics["resolution_rate_percent"],
-                regression_free_rate=metrics["regression_free_rate_percent"],
-                avg_duration_seconds=metrics["average_duration_seconds"],
-            )
-
+            metrics = self.evaluate_strategy(chrom, benchmark_tasks)
             evaluated_chromosomes.append((chrom, metrics))
 
         # Sort descending by fitness

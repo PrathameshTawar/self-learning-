@@ -4,6 +4,7 @@ Command Line Interface for EvoAgent using Click and Rich.
 
 import json
 from pathlib import Path
+from typing import List
 import click
 from rich.console import Console
 from rich.panel import Panel
@@ -62,22 +63,12 @@ def _build_state_machine(memory_path: Path) -> TaskStateMachine:
     )
 
 
-@click.group()
-def main() -> None:
-    """EvoAgent: A Self-Learning Autonomous Coding and Repair Agent."""
-    pass
-
-
-@main.command()
-@click.option("--task", "-t", required=True, type=click.Path(exists=True), help="Path to task.json")
-@click.option("--memory-db", default="data/evoagent_memory.db", help="Path to SQLite memory file")
-def run(task: str, memory_db: str) -> None:
-    """Run EvoAgent autonomous repair loop on a task file."""
-    task_path = Path(task)
+def _task_from_file(task_path: Path) -> Task:
+    """Build a Task from a benchmark task.json file."""
     with open(task_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    task_obj = Task(
+    return Task(
         task_id=data.get("task_id", task_path.stem),
         repository_path=task_path.parent / data.get("repo_dir", "code"),
         issue_description=data.get("issue_description", ""),
@@ -89,6 +80,30 @@ def run(task: str, memory_db: str) -> None:
         ),
         metadata=data.get("metadata", {}),
     )
+
+
+def _load_split_tasks(benchmark_root: Path, split_name: str) -> List[Task]:
+    """Load the tasks listed under "<split_name>_tasks" in split.json."""
+    split_file = benchmark_root / "split.json"
+    if not split_file.exists():
+        return []
+    task_ids = set(json.loads(split_file.read_text(encoding="utf-8")).get(f"{split_name}_tasks", []))
+    tasks = [_task_from_file(f) for f in sorted((benchmark_root / "tasks").glob("*/task.json"))]
+    return [t for t in tasks if t.task_id in task_ids]
+
+
+@click.group()
+def main() -> None:
+    """EvoAgent: A Self-Learning Autonomous Coding and Repair Agent."""
+    pass
+
+
+@main.command()
+@click.option("--task", "-t", required=True, type=click.Path(exists=True), help="Path to task.json")
+@click.option("--memory-db", default="data/evoagent_memory.db", help="Path to SQLite memory file")
+def run(task: str, memory_db: str) -> None:
+    """Run EvoAgent autonomous repair loop on a task file."""
+    task_obj = _task_from_file(Path(task))
 
     console.print(Panel(f"[bold cyan]EvoAgent Running Task:[/] {task_obj.task_id}\n[yellow]Issue:[/] {task_obj.issue_description}"))
 
@@ -182,37 +197,52 @@ def symbols(repo: str) -> None:
 @main.command()
 @click.option("--generations", "-g", default=2, help="Number of evolutionary tournament generations")
 @click.option("--population", "-pop", default=4, help="Strategy population size")
-def strategy_evolve(generations: int, population: int) -> None:
-    """Run genetic strategy tournament across benchmark tasks."""
+@click.option("--benchmarks", default="benchmarks", help="Benchmark root containing split.json and tasks/")
+def strategy_evolve(generations: int, population: int, benchmarks: str) -> None:
+    """Evolve strategies on the train split; promote the champion only on held-out evidence."""
     from evoagent.learning.evolution import EvolutionaryTournament
     from evoagent.learning.registry import StrategyRegistry
 
-    console.print(Panel(f"[bold magenta]Starting Strategy Evolutionary Tournament[/]\nGenerations: {generations} | Population: {population}"))
+    benchmark_root = Path(benchmarks)
+    train_tasks = _load_split_tasks(benchmark_root, "train")
+    held_out_tasks = _load_split_tasks(benchmark_root, "held_out")
+    if not train_tasks or not held_out_tasks:
+        console.print(f"[red]Need train and held-out tasks in {benchmark_root / 'split.json'}.[/]")
+        return
+
+    console.print(Panel(
+        f"[bold magenta]Starting Strategy Evolutionary Tournament[/]\n"
+        f"Generations: {generations} | Population: {population} | "
+        f"Train tasks: {len(train_tasks)} | Held-out tasks: {len(held_out_tasks)}"
+    ))
 
     sm = _build_state_machine(Path("data/evolution_memory.db"))
     tournament = EvolutionaryTournament(sm, population_size=population)
+    champion = tournament.evolve(train_tasks, total_generations=generations)
+    train_fitness = champion.fitness_score
 
-    # Load benchmark tasks
-    task_file = Path("benchmarks/tasks/bug_001_parser/task.json")
-    with open(task_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    task_obj = Task(
-        task_id=data.get("task_id", "bug-001"),
-        repository_path=task_file.parent / data.get("repo_dir", "code"),
-        issue_description=data.get("issue_description", ""),
-        targeted_test=data.get("targeted_test", ""),
-        regression_test=data.get("regression_test"),
-    )
-
-    champion = tournament.evolve([task_obj], total_generations=generations)
+    # Fitness measured on the tasks used for selection is optimistic; re-score on unseen tasks
+    held_out_metrics = tournament.evaluate_strategy(champion, held_out_tasks)
+    console.print(f"Champion {champion.strategy_id}: train fitness {train_fitness} | held-out fitness {champion.fitness_score}")
+    console.print(f"Prompt Style: {champion.prompt_style.value} | Top-K: {champion.retrieval_top_k} | Multi-File: {champion.enable_multi_file_context}")
 
     registry = StrategyRegistry(Path("data/strategies.json"))
-    v_id = registry.promote_strategy(champion, benchmark_evidence={"fitness": champion.fitness_score})
+    try:
+        v_id = registry.promote_strategy(
+            champion,
+            benchmark_evidence={
+                "split": "held_out",
+                "fitness": champion.fitness_score,
+                "train_fitness": train_fitness,
+                "resolution_rate_percent": held_out_metrics["resolution_rate_percent"],
+                "tasks": [t.task_id for t in held_out_tasks],
+            },
+        )
+    except ValueError as exc:
+        console.print(f"[yellow]Champion not promoted:[/] {exc}")
+        return
 
-    console.print(f"\n[bold green]Tournament Champion Evolved![/] Promoted as version [bold cyan]{v_id}[/]")
-    console.print(f"Strategy ID: {champion.strategy_id} | Fitness: {champion.fitness_score}")
-    console.print(f"Prompt Style: {champion.prompt_style.value} | Top-K: {champion.retrieval_top_k} | Multi-File: {champion.enable_multi_file_context}")
+    console.print(f"\n[bold green]Champion promoted as version [bold cyan]{v_id}[/][/]")
 
 
 if __name__ == "__main__":
