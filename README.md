@@ -1,10 +1,11 @@
 # EvoAgent: A Self-Learning Autonomous Coding Agent
 
-[![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/PrathameshTawar/self-learning-/actions/workflows/ci.yml/badge.svg)](https://github.com/PrathameshTawar/self-learning-/actions)
 [![Architecture](https://img.shields.io/badge/Architecture-Modular%20Monolith-orange.svg)](#system-architecture)
 
-> **EvoAgent** is an agentic software engineering system with a controlled learning loop. Unlike basic code-generation chatbots, EvoAgent observes failures, plans hypotheses, patches code in isolated sandboxes, independently evaluates test outcomes, and persists lessons into memory to systematically improve its future performance over measurable benchmarks.
+> **EvoAgent** is an agentic software engineering system with a verified self-learning loop. Unlike static code-generation assistants, EvoAgent observes test failures, plans hypotheses, patches code in isolated disposable environments, independently evaluates test outcomes, and persists lessons into BM25 episodic memory to systematically improve its performance over measurable held-out benchmarks.
 
 ---
 
@@ -15,7 +16,7 @@
 4. [Task State Machine](#task-state-machine)
 5. [Hardware-Conscious Design (GTX 1650 / 8GB RAM)](#hardware-conscious-design)
 6. [Quickstart Guide](#quickstart-guide)
-7. [Running Benchmarks & Tests](#running-benchmarks--tests)
+7. [Running Benchmarks & Held-Out Ablations](#running-benchmarks--held-out-ablations)
 8. [Repository Structure](#repository-structure)
 9. [Roadmap & Milestones](#roadmap--milestones)
 
@@ -28,32 +29,33 @@ A self-learning coding agent executes a disciplined lifecycle:
 ```mermaid
 graph TD
     A[Observe] -->|Read code, stack traces, test results| B[Plan]
-    B -->|Form hypotheses & repair plan| C[Act]
-    C -->|Apply minimal patch in isolated sandbox| D[Evaluate]
+    B -->|Form hypotheses & retry feedback| C[Act]
+    C -->|Apply SEARCH/REPLACE in throwaway tempdir| D[Evaluate]
     D -->|Independent regression & unit tests| E{Success?}
     E -->|Yes| F[Learn]
-    E -->|No| G[Retry / Analyze Failure]
+    E -->|No| G[Retry with Feedback]
     G --> B
-    F -->|Store verified repair & provenance| H[Improve]
-    H -->|Retrieve relevant past solutions| B
+    F -->|Store verified repair & real hypothesis| H[Improve]
+    H -->|BM25 retrieval over error signatures| B
 ```
 
 ### Core Design Principles
-1. **The evaluator is the authority**: The coding agent cannot declare its own fix successful. Only independent, reproducible test executions can validate patches.
-2. **The sandbox is untrusted**: Generated code and test dependencies run with strict execution timeouts, process limits, and clean repository snapshots.
-3. **Evidence-based learning**: Every claimed improvement must survive a fixed held-out evaluation set. Memorization is not learning.
-4. **Isolated updates**: Model weights and policy changes are never modified blindly from a single task. Offline evaluation and explicit promotion gates are enforced.
-5. **Traceable telemetry**: Every task records the model version, prompts, tool calls, patches, test diffs, and final decisions.
+1. **The evaluator is the sole authority**: The coding agent cannot declare its own fix successful. Only independent, reproducible test executions can validate patches.
+2. **Reproduction gate**: Tasks where the targeted test already passes pre-patch are rejected as `INVALID_TASK`.
+3. **The sandbox runs in throwaway copies**: Tasks execute inside isolated temporary directories (`tempfile.TemporaryDirectory`). Accepted patches and failed attempts never pollute or corrupt the original benchmark or host repository.
+4. **Reliable patch format for small models**: Prefers exact `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` blocks over brittle unified diff line counts.
+5. **Evidence-based learning**: Improvements are validated on a fixed held-out evaluation set (`benchmarks/split.json`), comparing zero-shot baselines against multi-attempt feedback and episodic memory.
+6. **Traceable telemetry**: Every episode records the model version, strategy ID, prompts, tool calls, patches, test diffs, and real model hypotheses.
 
 ---
 
 ## Three Learning Layers
 
-| Layer | Type | Mechanism | Update Frequency |
+| Layer | Type | Mechanism | Status |
 |---|---|---|---|
-| **Layer A** | **Episodic Memory** | Stores error signatures, root causes, patches, and verified outcomes. Injects proven lessons into future planning sessions. | After every evaluated task |
-| **Layer B** | **Strategy Optimization** | Compares alternative planning prompts, search heuristics, and repair policies over fixed benchmark suites. | After batches of experiments |
-| **Layer C** | **Model Adaptation** | Curates accepted vs. rejected repair pairs for Supervised Fine-Tuning (SFT) and Direct Preference Optimization (DPO) using LoRA/PEFT. | Offline training runs |
+| **Layer A** | **Episodic Memory** | Stores failure signatures, root causes, SEARCH/REPLACE patches, and verified outcomes. Injects proven lessons into future planning sessions via Okapi BM25 ranking. | **Implemented & Tested** |
+| **Layer B** | **Strategy Optimization** | Genetic evolution of hyperparameters (`prompt_style`, `retrieval_policy`, `retrieval_top_k`, `max_patch_lines`, `temperature`, `enable_multi_file_context`) with a statistical promotion gate. | **Implemented & Tested** |
+| **Layer C** | **Model Adaptation** | Curates accepted vs. rejected repair pairs for Supervised Fine-Tuning (SFT) and Direct Preference Optimization (DPO) using LoRA/PEFT when sufficient verified episodes accumulate. | Foundation ready (`export-dataset`) |
 
 ---
 
@@ -68,22 +70,26 @@ graph TD
 +-----------------------------------------------------------------------------------+
 |                        Orchestration & Task State Machine                         |
 |  - Task lifecycle management (QUEUED -> ANALYZING -> PLANNED -> PATCHING ...)    |
-|  - Budget enforcement (max tool calls, max retries, max diff size, wall timeouts) |
+|  - Isolated execution in throwaway temp directories (no repo corruption)          |
+|  - Pre-patch test verification gate (rejects pre-passing tests as INVALID_TASK)    |
+|  - Retry feedback injection (supplies failed patches and errors to next attempt)  |
 +-----------------------------------------------------------------------------------+
         |                           |                           |
         v                           v                           v
 +--------------------+      +--------------------+      +--------------------+
 |   Analysis Tools   |      |  Pluggable Models  |      |   Memory & Store   |
-| - Git inspection   |      | - Local Heuristic  |      | - Episodic records |
-| - Code search      |      | - Ollama / vLLM    |      | - Failure signature|
-| - Symbol indexing  |      | - OpenAI-compatible|      | - SQLite / pgvector|
+| - Git inspection   |      | - OpenAI-compatible|      | - Okapi BM25 search|
+| - AST symbols (ast)|      |   (Ollama/vLLM)    |      | - SQLite persistent|
+| - Code search      |      | - Test Mock        |      | - In-memory test   |
+| - SEARCH/REPLACE   |      |   (Heuristic Model)|      |   fixtures         |
 +--------------------+      +--------------------+      +--------------------+
                                     |
                                     v
 +-----------------------------------------------------------------------------------+
 |                            Isolated Execution Sandbox                             |
-|  - Disposable process runner (subprocesses with timeouts and clean environments)   |
-|  - Patch validation & rollback protection                                         |
+|  - Strict environment variable allowlist (blocks host secret leaking)             |
+|  - Argument vector execution without shell=True                                   |
+|  - POSIX resource boundaries on CPU/memory where supported                        |
 +-----------------------------------------------------------------------------------+
                                     |
                                     v
@@ -93,60 +99,22 @@ graph TD
 |  - Post-patch test verification (must pass targeted test)                         |
 |  - Regression suite validation (must not break existing tests)                     |
 +-----------------------------------------------------------------------------------+
-                                    |
-                                    v
-+-----------------------------------------------------------------------------------+
-|                             Continuous Learning Engine                            |
-|  - Provenance-tracked episode curation                                            |
-|  - Dataset preparation for SFT (prompt-response) and DPO (accepted/rejected pairs)|
-|  - Strategy & prompt evaluation across benchmarks                                 |
-+-----------------------------------------------------------------------------------+
-```
-
----
-
-## Task State Machine
-
-EvoAgent executes tasks through an explicit, auditable state machine:
-
-```
-[QUEUED] 
-   |
-   v
-[ANALYZING] ------------> [FAILED (Unresolvable)]
-   |
-   v
-[PLANNED]
-   |
-   v
-[PATCHING]
-   |
-   v
-[EVALUATING]
-   |
-   +---> [SUCCEEDED] --------> [LEARNING_REVIEW] ------> [COMPLETED]
-   |
-   +---> [RETRYABLE_FAILURE] -> [ANALYZING] (if attempts < max_budget)
-   |
-   +---> [FAILED] (budget exhausted)
 ```
 
 ---
 
 ## Hardware-Conscious Design
 
-Configured specifically for local Windows machines with **NVIDIA GeForce GTX 1650 (4 GB VRAM)** and **8 GB System RAM**:
-- **Lightweight by default**: Fast startup without mandatory Docker daemons or heavy background services for initial milestones.
-- **Subprocess Isolation**: Process-level sandboxing with strict timeouts and resource limits on Windows/PowerShell.
-- **Quantized / Small Model Support**: Out-of-the-box support for lightweight local models (e.g. Qwen2.5-Coder 1.5B via Ollama or GGUF) and deterministic heuristic models for automated benchmark verification.
-- **Resource Protection**: Memory-efficient SQLite episodic store that scales to PostgreSQL + pgvector when deployed on servers.
+Configured specifically for local developer machines (e.g. **NVIDIA GeForce GTX 1650 4 GB VRAM / 8–16 GB RAM**):
+- **Zero Heavy Daemons**: Standalone Python architecture using standard library `ast`, SQLite, and subprocess execution.
+- **Small Model Optimized**: Tailored for 1.5B–7B coding models (e.g. `qwen2.5-coder:1.5b` via Ollama) using exact SEARCH/REPLACE blocks.
+- **Offline Test Mock**: Includes `HeuristicCodingModel` strictly as a fast, deterministic mock for unit tests and CI without needing an LLM.
 
 ---
 
 ## Quickstart Guide
 
 ### 1. Prerequisites
-- Windows 10/11 with PowerShell
 - Python 3.11+ (Python 3.12 recommended)
 - Git
 
@@ -159,24 +127,57 @@ python -m pip install --upgrade pip
 pip install -e .
 ```
 
-### 3. Run the Demonstration Repair Loop
+### 3. Run Autonomous Repair
 ```powershell
-# Run the built-in bug repair demonstration
+# Run repair on a specific benchmark task
 python -m evoagent.cli run --task benchmarks/tasks/bug_001_parser/task.json
 ```
 
-### 4. Run Benchmarks
+### 4. Launch Live Dashboard
 ```powershell
-python benchmarks/run_benchmarks.py
+# Open browser-based telemetry dashboard
+python -m evoagent.cli dashboard --port 8080
 ```
 
 ---
 
-## Running Benchmarks & Tests
+## Running Benchmarks & Held-Out Ablations
+
+### Run Full Benchmark Suite
+```powershell
+python benchmarks/run_benchmarks.py --split all
+```
+
+### Run Train vs. Held-Out Split
+```powershell
+# Run only train tasks
+python benchmarks/run_benchmarks.py --split train
+
+# Run only held-out tasks
+python benchmarks/run_benchmarks.py --split held_out
+```
+
+### Run 3-Way Self-Learning Ablation Table
+Evaluate held-out tasks under 3 controlled experimental conditions to prove learning transfer:
+```powershell
+python benchmarks/run_benchmarks.py --eval-comparison
+```
+
+Outputs the comparative ablation table:
+- **Condition A (Zero-Shot Baseline)**: No memory, 1 attempt.
+- **Condition B (Feedback Loop)**: No memory, 3 attempts with retry feedback.
+- **Condition C (Full Self-Learning)**: Episodic Memory + Multi-attempt retry feedback.
+
+---
+
+## Running Tests & Linting
 
 ```powershell
-# Run unit and end-to-end tests
-pytest -q
+# Run unit & end-to-end tests
+pytest -v -p no:deepeval
+
+# Run linter
+ruff check src tests benchmarks
 ```
 
 ---
@@ -185,54 +186,69 @@ pytest -q
 
 ```
 ├── .gitignore
+├── LICENSE                       # MIT License
 ├── pyproject.toml
-├── requirements.txt
-├── .env.example
 ├── README.md
+├── .github/
+│   └── workflows/
+│       └── ci.yml                # GitHub Actions test matrix (Python 3.11, 3.12)
 ├── src/
 │   └── evoagent/
 │       ├── config.py             # Configuration & environment variables
 │       ├── cli.py                # Command-line interface
-│       ├── domain/               # Domain models & state machine definitions
+│       ├── domain/               # Domain models & states (Pydantic v2)
 │       │   ├── models.py
 │       │   └── states.py
-│       ├── tools/                # Git, search, patch, and test tools
-│       │   ├── git_tools.py
-│       │   ├── search_tools.py
-│       │   ├── patch_tools.py
-│       │   └── test_tools.py
+│       ├── tools/                # Analysis tools
+│       │   ├── git_tools.py      # Git status & diff inspection
+│       │   ├── search_tools.py   # Code search & file navigation
+│       │   ├── patch_tools.py    # SEARCH/REPLACE & unified diff applicator
+│       │   └── test_tools.py     # Pytest execution & error extraction
 │       ├── sandbox/              # Process isolation & execution runners
 │       │   ├── interface.py
-│       │   └── local_runner.py
-│       ├── models/               # Pluggable model backends (Heuristic, Ollama, API)
+│       │   └── local_runner.py   # Environment allowlisting & process sandbox
+│       ├── models/               # Pluggable inference backends
 │       │   ├── base.py
-│       │   ├── heuristic_model.py
-│       │   └── open_model.py
-│       ├── evaluation/           # Independent evaluator & benchmark metrics
+│       │   ├── open_model.py     # OpenAI / Ollama / vLLM SEARCH/REPLACE backend
+│       │   └── heuristic_model.py# Offline test mock fixture
+│       ├── evaluation/           # Independent evaluation authority
 │       │   ├── evaluator.py
 │       │   └── metrics.py
-│       ├── memory/               # Episodic experience memory & retrieval
+│       ├── memory/               # Episodic memory & retrieval (Layer A)
+│       │   ├── bm25.py           # Okapi BM25 ranking algorithm
 │       │   ├── schemas.py
-│       │   ├── store.py
-│       │   └── retrieval.py
-│       ├── orchestration/        # Planner, repair agent, & task controller
-│       │   ├── planner.py
-│       │   ├── repair_agent.py
-│       │   └── state_machine.py
-│       └── learning/             # Dataset curation, strategy tuning, & experiments
-│           ├── dataset.py
-│           ├── strategy.py
-│           └── experiments.py
-├── benchmarks/                   # Seeded tasks & reproducible benchmarks
-│   ├── tasks/
-│   │   └── bug_001_parser/
-│   └── run_benchmarks.py
-├── tests/                        # Comprehensive unit & E2E tests
-│   ├── unit/
-│   └── e2e/
-└── training/                     # Dataset export & LoRA fine-tuning scripts
-    ├── prepare_dataset.py
-    └── train_lora.py
+│       │   ├── store.py          # SQLite & in-memory stores
+│       │   └── retrieval.py      # Experience retriever with policies
+│       ├── intelligence/         # AST symbol intelligence
+│       │   ├── ast_symbols.py    # Python AST symbol extractor
+│       │   ├── symbol_graph.py   # Cross-file symbol reference graph
+│       │   └── context_builder.py# Multi-file AST context assembly
+│       ├── dashboard/            # Local web telemetry dashboard
+│       │   ├── server.py         # HTTP API & static server
+│       │   └── static/
+│       │       └── index.html    # Single-page monitoring UI
+│       ├── orchestration/        # Orchestration engine
+│       │   ├── planner.py        # Task planner with retry feedback & genes
+│       │   ├── repair_agent.py   # Candidate proposal coordinator
+│       │   └── state_machine.py  # FSM lifecycle in throwaway tempdirs
+│       └── learning/             # Self-learning systems (Layers B & C)
+│           ├── dataset.py        # SFT / DPO training split curator
+│           ├── genetic.py        # Strategy chromosome & genetic operators
+│           ├── evolution.py      # Tournament & generational strategy evaluation
+│           └── registry.py       # Versioned strategy registry with promotion gate
+├── benchmarks/                   # Benchmark suite & evaluation splits
+│   ├── split.json                # Fixed train vs. held-out task partition
+│   ├── run_benchmarks.py         # Multi-condition evaluation runner
+│   └── tasks/
+│       ├── bug_001_parser/       # [train] IndexError on empty input
+│       ├── bug_002_multifile/    # [train] ZeroDivisionError with cross-file context
+│       ├── bug_003_binary_search/# [train] Off-by-one boundary index defect
+│       ├── bug_004_dict_merge/   # [held-out] NoneType attribute error in dict merge
+│       ├── bug_005_levenshtein/  # [held-out] Dynamic programming boundary condition
+│       └── bug_006_rate_limiter/ # [held-out] Sliding window filter inequality bug
+└── tests/                        # Comprehensive unit & E2E tests
+    ├── unit/
+    └── e2e/
 ```
 
 ---
@@ -240,7 +256,7 @@ pytest -q
 ## Roadmap & Milestones
 
 - [x] **Milestone 1: Controlled Repair Loop & Foundation** (Task runner, sandbox execution, patch application, independent evaluation, episodic memory).
-- [ ] **Milestone 2: Multi-File Context & AST Symbol Navigation** (Tree-sitter integration, cross-file references).
-- [ ] **Milestone 3: Strategy Optimization Engine** (Automated prompt exploration, genetic strategy mutation).
+- [x] **Milestone 2: Multi-File Context & AST Symbol Navigation** (Python AST symbol extraction, dependency graph, cross-file reference assembly).
+- [x] **Milestone 3: Strategy Optimization Engine** (Genetic strategy evolution, prompt exploration, statistical promotion gate).
 - [ ] **Milestone 4: PEFT/Q-LoRA 4-bit Fine-Tuning** (Curated dataset export, adapter training on GeForce GTX 1650).
 - [ ] **Milestone 5: Production Deployment & Remote Workers** (FastAPI API, PostgreSQL/pgvector, Redis queues).
