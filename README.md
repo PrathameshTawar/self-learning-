@@ -5,7 +5,7 @@
 [![CI](https://github.com/PrathameshTawar/self-learning-/actions/workflows/ci.yml/badge.svg)](https://github.com/PrathameshTawar/self-learning-/actions)
 [![Architecture](https://img.shields.io/badge/Architecture-Modular%20Monolith-orange.svg)](#system-architecture)
 
-> **EvoAgent** is an agentic software engineering system with a verified self-learning loop. Unlike static code-generation assistants, EvoAgent observes test failures, plans hypotheses, patches code in isolated disposable environments, independently evaluates test outcomes, and persists lessons into BM25 episodic memory to systematically improve its performance over measurable held-out benchmarks.
+> **EvoAgent** is an agentic software engineering system with a test-verified learning loop. EvoAgent observes test failures, plans hypotheses, patches code in isolated disposable environments, independently evaluates test outcomes, and persists verified lessons into BM25 episodic memory. A fixed train/held-out benchmark split measures whether that memory actually helps on unseen bugs (see [Results](#results)).
 
 ---
 
@@ -17,8 +17,9 @@
 5. [Hardware-Conscious Design (GTX 1650 / 8GB RAM)](#hardware-conscious-design)
 6. [Quickstart Guide](#quickstart-guide)
 7. [Running Benchmarks & Held-Out Ablations](#running-benchmarks--held-out-ablations)
-8. [Repository Structure](#repository-structure)
-9. [Roadmap & Milestones](#roadmap--milestones)
+8. [Results](#results)
+9. [Repository Structure](#repository-structure)
+10. [Roadmap & Milestones](#roadmap--milestones)
 
 ---
 
@@ -41,11 +42,11 @@ graph TD
 
 ### Core Design Principles
 1. **The evaluator is the sole authority**: The coding agent cannot declare its own fix successful. Only independent, reproducible test executions can validate patches.
-2. **Reproduction gate**: Tasks where the targeted test already passes pre-patch are rejected as `INVALID_TASK`.
+2. **Reproduction gate**: Tasks where the targeted test already passes pre-patch, or never runs (bad path or `-k` filter), are rejected as `INVALID_TASK`.
 3. **The sandbox runs in throwaway copies**: Tasks execute inside isolated temporary directories (`tempfile.TemporaryDirectory`). Accepted patches and failed attempts never pollute or corrupt the original benchmark or host repository.
-4. **Reliable patch format for small models**: Prefers exact `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` blocks over brittle unified diff line counts.
-5. **Evidence-based learning**: Improvements are validated on a fixed held-out evaluation set (`benchmarks/split.json`), comparing zero-shot baselines against multi-attempt feedback and episodic memory.
-6. **Traceable telemetry**: Every episode records the model version, strategy ID, prompts, tool calls, patches, test diffs, and real model hypotheses.
+4. **Reliable patch format for small models**: Prefers exact `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` blocks. A SEARCH must match whole lines in exactly one place; ambiguous or missing matches are rejected and fed back to the next attempt. Unified diffs are applied hunk by hunk using their context lines.
+5. **Evidence-based learning**: Memory is built from the train split only and frozen while the held-out split (`benchmarks/split.json`) is evaluated, so a task can never retrieve its own solution. Strategy champions are promoted on held-out fitness, not the score they were selected with.
+6. **Traceable telemetry**: Every episode records the strategy ID, failure signature, patch, model hypothesis, outcome, and run telemetry (duration, attempts, patch validity, regression results). Prompts and individual tool calls are not stored yet.
 
 ---
 
@@ -54,7 +55,7 @@ graph TD
 | Layer | Type | Mechanism | Status |
 |---|---|---|---|
 | **Layer A** | **Episodic Memory** | Stores failure signatures, root causes, SEARCH/REPLACE patches, and verified outcomes. Injects proven lessons into future planning sessions via Okapi BM25 ranking. | **Implemented & Tested** |
-| **Layer B** | **Strategy Optimization** | Genetic evolution of hyperparameters (`prompt_style`, `retrieval_policy`, `retrieval_top_k`, `max_patch_lines`, `temperature`, `enable_multi_file_context`) with a statistical promotion gate. | **Implemented & Tested** |
+| **Layer B** | **Strategy Optimization** | Genetic evolution of hyperparameters (`prompt_style`, `retrieval_policy`, `retrieval_top_k`, `max_repair_attempts`, `max_patch_lines`, `temperature`, `enable_multi_file_context`), evaluated against frozen memory on the train split and promoted only if held-out fitness beats the active strategy by a fixed margin. | **Implemented & Tested** (no LLM results yet) |
 | **Layer C** | **Model Adaptation** | Curates accepted vs. rejected repair pairs for Supervised Fine-Tuning (SFT) and Direct Preference Optimization (DPO) using LoRA/PEFT when sufficient verified episodes accumulate. | Foundation ready (`export-dataset`) |
 
 ---
@@ -90,6 +91,7 @@ graph TD
 |  - Strict environment variable allowlist (blocks host secret leaking)             |
 |  - Argument vector execution without shell=True                                   |
 |  - POSIX resource boundaries on CPU/memory where supported                        |
+|  - No network or filesystem isolation: run untrusted models inside a container    |
 +-----------------------------------------------------------------------------------+
                                     |
                                     v
@@ -158,22 +160,43 @@ python benchmarks/run_benchmarks.py --split held_out
 ```
 
 ### Run 3-Way Self-Learning Ablation Table
-Evaluate held-out tasks under 3 controlled experimental conditions to prove learning transfer:
+Evaluate held-out tasks under 3 controlled conditions to measure learning transfer:
 ```powershell
+# With a real model (recommended)
+python benchmarks/run_benchmarks.py --eval-comparison --provider ollama --model qwen2.5-coder:1.5b
+
+# With the offline heuristic mock (pipeline check only)
 python benchmarks/run_benchmarks.py --eval-comparison
 ```
 
-Outputs the comparative ablation table:
+Outputs the comparative ablation table and writes `data/ablation_results.json` (shown in the dashboard):
 - **Condition A (Zero-Shot Baseline)**: No memory, 1 attempt.
 - **Condition B (Feedback Loop)**: No memory, 3 attempts with retry feedback.
-- **Condition C (Full Self-Learning)**: Episodic Memory + Multi-attempt retry feedback.
+- **Condition C (Train-Split Memory)**: Memory learned on the train split only, frozen during held-out evaluation, plus retry feedback.
+
+The memory effect is **C - B**; A to B isolates retry feedback.
+
+---
+
+## Results
+
+Measured with the offline heuristic mock (`python benchmarks/run_benchmarks.py --eval-comparison`):
+
+| Condition | Held-out resolution |
+|---|---|
+| A: Zero-shot, no memory | 0% (0/3) |
+| B: Retry feedback, no memory | 0% (0/3) |
+| C: Train-split memory + feedback | 0% (0/3) |
+
+This is the expected result for the mock: its hard-coded rules match only the seeded train bugs (it solves 2 of 3), so it cannot transfer anything. **No LLM results have been published yet.** Run the command above with `--provider ollama` to produce them. With 3 held-out tasks every task moves the rate by 33 points, so a meaningful comparison needs a much larger held-out split (30+ tasks) and repeated runs.
 
 ---
 
 ## Running Tests & Linting
 
 ```powershell
-# Run unit & end-to-end tests
+# Install test & lint tools, then run unit & end-to-end tests
+pip install -e ".[dev]"
 pytest -v -p no:deepeval
 
 # Run linter
@@ -210,6 +233,7 @@ ruff check src tests benchmarks
 │       ├── models/               # Pluggable inference backends
 │       │   ├── base.py
 │       │   ├── open_model.py     # OpenAI / Ollama / vLLM SEARCH/REPLACE backend
+│       │   ├── factory.py        # Provider selection shared by CLI and benchmarks
 │       │   └── heuristic_model.py# Offline test mock fixture
 │       ├── evaluation/           # Independent evaluation authority
 │       │   ├── evaluator.py
@@ -241,7 +265,7 @@ ruff check src tests benchmarks
 │   ├── run_benchmarks.py         # Multi-condition evaluation runner
 │   └── tasks/
 │       ├── bug_001_parser/       # [train] IndexError on empty input
-│       ├── bug_002_multifile/    # [train] ZeroDivisionError with cross-file context
+│       ├── bug_002_multifile/    # [train] AttributeError on None across service/validator
 │       ├── bug_003_binary_search/# [train] Off-by-one boundary index defect
 │       ├── bug_004_dict_merge/   # [held-out] NoneType attribute error in dict merge
 │       ├── bug_005_levenshtein/  # [held-out] Dynamic programming boundary condition
@@ -257,6 +281,6 @@ ruff check src tests benchmarks
 
 - [x] **Milestone 1: Controlled Repair Loop & Foundation** (Task runner, sandbox execution, patch application, independent evaluation, episodic memory).
 - [x] **Milestone 2: Multi-File Context & AST Symbol Navigation** (Python AST symbol extraction, dependency graph, cross-file reference assembly).
-- [x] **Milestone 3: Strategy Optimization Engine** (Genetic strategy evolution, prompt exploration, statistical promotion gate).
+- [x] **Milestone 3: Strategy Optimization Engine** (Genetic strategy evolution, prompt exploration, held-out promotion gate).
 - [ ] **Milestone 4: PEFT/Q-LoRA 4-bit Fine-Tuning** (Curated dataset export, adapter training on GeForce GTX 1650).
 - [ ] **Milestone 5: Production Deployment & Remote Workers** (FastAPI API, PostgreSQL/pgvector, Redis queues).
