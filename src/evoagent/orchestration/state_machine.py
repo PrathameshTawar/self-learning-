@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import time
 import uuid
-from typing import Optional
+from typing import Any, Optional
 from evoagent.domain.models import (
     AttemptRecord,
     MemoryEpisodeRecord,
@@ -51,15 +51,29 @@ class TaskStateMachine:
         self.git_inspector = git_inspector
         self.test_runner = test_runner
 
-    def execute_task(self, task: Task) -> TaskResult:
+    def execute_task(self, task: Task, strategy: Optional[Any] = None) -> TaskResult:
         """
         Run the end-to-end autonomous repair loop on a task.
         Executes entirely within an isolated throwaway temporary workspace to protect
         the original repository and ensure idempotent evaluations.
+        Supports strategy chromosome parameterization (Layer B).
         """
         start_time = time.perf_counter()
         attempts = []
         accepted_patch: Optional[PatchProposal] = None
+
+        # Extract strategy genes if provided
+        prompt_style = getattr(strategy, "prompt_style", "minimal_diff")
+        retrieval_policy = getattr(strategy, "retrieval_policy", "signature_match")
+        retrieval_top_k = getattr(strategy, "retrieval_top_k", 3)
+        enable_multi_file = getattr(strategy, "enable_multi_file_context", True)
+        max_patch_lines = getattr(strategy, "max_patch_lines", self.patch_tool.max_patch_lines)
+        strat_temperature = getattr(strategy, "temperature", None)
+        strategy_id = getattr(strategy, "strategy_id", "default")
+
+        # Configure model temperature if supported
+        if strat_temperature is not None and hasattr(self.repair_agent.model, "temperature"):
+            self.repair_agent.model.temperature = strat_temperature
 
         with tempfile.TemporaryDirectory(prefix=f"evo_{task.task_id}_") as temp_dir:
             temp_path = Path(temp_dir)
@@ -76,7 +90,7 @@ class TaskStateMachine:
 
             isolated_task = task.model_copy(update={"repository_path": work_dir})
             searcher = CodeSearcher(work_dir)
-            isolated_patch_tool = PatchTool(root_path=work_dir, max_patch_lines=self.patch_tool.max_patch_lines)
+            isolated_patch_tool = PatchTool(root_path=work_dir, max_patch_lines=max_patch_lines)
 
             # 2. Pre-patch verification gate - confirm bug reproduces initially
             pre_test: TestResult = self.evaluator.verify_reproduction(isolated_task)
@@ -112,7 +126,7 @@ class TaskStateMachine:
                     pre_test_result=pre_test,
                 )
 
-                # Step 3a: Planning & memory retrieval (incorporates prior failure feedback on retries)
+                # Step 3a: Planning & memory retrieval (incorporates prior failure feedback & strategy genes)
                 prompt = self.planner.plan_repair(
                     task=isolated_task,
                     pre_test=pre_test,
@@ -120,6 +134,10 @@ class TaskStateMachine:
                     attempt=attempt_no,
                     previous_attempt_patch=prev_attempt_patch,
                     previous_attempt_error=prev_attempt_error,
+                    prompt_style=prompt_style,
+                    retrieval_policy=retrieval_policy,
+                    retrieval_top_k=retrieval_top_k,
+                    enable_multi_file_context=enable_multi_file,
                 )
                 attempt_record.state = TaskState.PLANNED
 
@@ -203,6 +221,7 @@ class TaskStateMachine:
                 targeted_tests_passed=bool(accepted_patch),
                 regression_tests_passed=bool(accepted_patch and last_attempt and last_attempt.evaluation and last_attempt.evaluation.regression_tests_passed),
                 lessons_learned=lessons,
+                strategy_id=strategy_id,
             )
             self.memory_store.save_episode(episode)
 
