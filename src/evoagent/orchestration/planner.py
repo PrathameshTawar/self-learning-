@@ -50,7 +50,7 @@ class TaskPlanner:
                 if not rel.startswith("tests/") and not rel.startswith("test_"):
                     return rel
             except Exception:
-                if not m.startswith("test") and not "/test" in m:
+                if not m.startswith("test") and "/test" not in m:
                     return Path(m).as_posix()
 
         # Fallback: find source files matching test name
