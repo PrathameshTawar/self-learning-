@@ -76,3 +76,84 @@ def test_autonomous_repair_loop_e2e(temp_repo: Path, local_sandbox: LocalSubproc
     lessons = retriever.retrieve_relevant_lessons("IndexError: list index out of range")
     assert len(lessons) >= 1
     assert "e2e-parser-fix" in lessons[0]
+
+
+def test_autonomous_multi_file_repair_e2e(tmp_path: Path, local_sandbox: LocalSubprocessSandbox):
+    """
+    Milestone 2 integration test:
+    Verify that EvoAgent traverses cross-file AST dependencies to fix a bug in validator.py
+    called from service.py.
+    """
+    repo = tmp_path / "multifile_repo"
+    repo.mkdir()
+
+    # Create validator.py with NoneType defect
+    (repo / "validator.py").write_text(
+        "def normalize_and_validate(raw_text: str) -> str:\n"
+        "    cleaned = raw_text.strip()\n"
+        "    return cleaned\n",
+        encoding="utf-8",
+    )
+
+    # Create service.py calling validator
+    (repo / "service.py").write_text(
+        "from validator import normalize_and_validate\n\n"
+        "def process_order(order_id: str, desc: str) -> dict:\n"
+        "    cleaned = normalize_and_validate(desc)\n"
+        "    return {'id': order_id, 'desc': cleaned}\n",
+        encoding="utf-8",
+    )
+
+    # Create test suite
+    tests_dir = repo / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_service.py").write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, str(Path(__file__).parent.parent))\n"
+        "from service import process_order\n\n"
+        "def test_process_normal():\n"
+        "    res = process_order('1', ' item ')\n"
+        "    assert res['desc'] == 'item'\n\n"
+        "def test_process_none():\n"
+        "    res = process_order('2', None)\n"
+        "    assert res['desc'] == ''\n",
+        encoding="utf-8",
+    )
+
+    memory_store = InMemoryMemoryStore()
+    retriever = ExperienceRetriever(memory_store)
+    planner = TaskPlanner(retriever)
+    test_runner = TestRunnerTool(local_sandbox)
+    evaluator = IndependentEvaluator(test_runner)
+    model = HeuristicCodingModel()
+    patch_tool = PatchTool(root_path=repo)
+    repair_agent = RepairAgent(model, patch_tool)
+    git_inspector = GitInspector(local_sandbox)
+
+    state_machine = TaskStateMachine(
+        planner=planner,
+        repair_agent=repair_agent,
+        evaluator=evaluator,
+        memory_store=memory_store,
+        patch_tool=patch_tool,
+        git_inspector=git_inspector,
+        test_runner=test_runner,
+    )
+
+    task = Task(
+        task_id="e2e-multifile-fix",
+        repository_path=repo,
+        issue_description="service.py crashes with AttributeError when validator.normalize_and_validate receives None",
+        targeted_test="tests/test_service.py -k test_process_none",
+        regression_test="tests/test_service.py",
+        budget=ExecutionBudget(max_attempts=3, timeout_seconds=30),
+        metadata={"target_file": "validator.py"},
+    )
+
+    result = state_machine.execute_task(task)
+
+    assert result.is_successful is True
+    assert result.final_state == TaskState.COMPLETED
+    assert result.accepted_patch is not None
+    assert result.accepted_patch.target_file == "validator.py"
