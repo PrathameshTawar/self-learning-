@@ -12,6 +12,8 @@ from evoagent.sandbox.interface import ISandboxRunner
 class TestRunnerTool:
     """Runs test suites inside the execution sandbox and parses test metrics."""
 
+    __test__ = False
+
     def __init__(self, sandbox: ISandboxRunner, python_executable: Optional[str] = None) -> None:
         self.sandbox = sandbox
         self.python_executable = python_executable or sys.executable
