@@ -86,8 +86,8 @@ class LocalSubprocessSandbox(ISandboxRunner):
 
         except subprocess.TimeoutExpired as exc:
             duration = time.perf_counter() - start_time
-            stdout_str = exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
-            stderr_str = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+            stdout_str = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout.decode("utf-8", errors="replace") if exc.stdout else "")
+            stderr_str = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr.decode("utf-8", errors="replace") if exc.stderr else "")
             return ExecutionOutcome(
                 exit_code=124,  # Standard timeout exit code
                 stdout=stdout_str[:MAX_OUTPUT_BYTES],
