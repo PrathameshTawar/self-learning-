@@ -159,5 +159,61 @@ def dashboard(port: int, no_browser: bool) -> None:
     start_dashboard(port=port, open_browser=not no_browser)
 
 
+@main.command()
+@click.option("--repo", "-r", default=".", help="Path to repository")
+def symbols(repo: str) -> None:
+    """Index and display AST symbols and cross-file references."""
+    from evoagent.intelligence.symbol_graph import SymbolGraph
+    graph = SymbolGraph(Path(repo))
+
+    table = Table(title=f"EvoAgent AST Symbol Index ({len(graph.symbols_by_name)} symbols)")
+    table.add_column("Symbol Name", style="cyan")
+    table.add_column("Type", style="yellow")
+    table.add_column("File", style="green")
+    table.add_column("Signature", style="white")
+
+    for name, sym_list in list(graph.symbols_by_name.items())[:30]:
+        for s in sym_list:
+            table.add_row(s.name, s.symbol_type.value, s.file_path, s.signature[:50])
+
+    console.print(table)
+
+
+@main.command()
+@click.option("--generations", "-g", default=2, help="Number of evolutionary tournament generations")
+@click.option("--population", "-pop", default=4, help="Strategy population size")
+def strategy_evolve(generations: int, population: int) -> None:
+    """Run genetic strategy tournament across benchmark tasks."""
+    from evoagent.learning.evolution import EvolutionaryTournament
+    from evoagent.learning.registry import StrategyRegistry
+
+    console.print(Panel(f"[bold magenta]Starting Strategy Evolutionary Tournament[/]\nGenerations: {generations} | Population: {population}"))
+
+    sm = _build_state_machine(Path("data/evolution_memory.db"))
+    tournament = EvolutionaryTournament(sm, population_size=population)
+
+    # Load benchmark tasks
+    task_file = Path("benchmarks/tasks/bug_001_parser/task.json")
+    with open(task_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    task_obj = Task(
+        task_id=data.get("task_id", "bug-001"),
+        repository_path=task_file.parent / data.get("repo_dir", "code"),
+        issue_description=data.get("issue_description", ""),
+        targeted_test=data.get("targeted_test", ""),
+        regression_test=data.get("regression_test"),
+    )
+
+    champion = tournament.evolve([task_obj], total_generations=generations)
+
+    registry = StrategyRegistry(Path("data/strategies.json"))
+    v_id = registry.promote_strategy(champion, benchmark_evidence={"fitness": champion.fitness_score})
+
+    console.print(f"\n[bold green]Tournament Champion Evolved![/] Promoted as version [bold cyan]{v_id}[/]")
+    console.print(f"Strategy ID: {champion.strategy_id} | Fitness: {champion.fitness_score}")
+    console.print(f"Prompt Style: {champion.prompt_style.value} | Top-K: {champion.retrieval_top_k} | Multi-File: {champion.enable_multi_file_context}")
+
+
 if __name__ == "__main__":
     main()
