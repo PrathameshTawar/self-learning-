@@ -7,7 +7,7 @@ def binary_search(arr, target):
         return -1
 
     low = 0
-    high = len(arr)  # Defect: high should be len(arr) - 1
+    high = len(arr)
 
     while low <= high:
         mid = (low + high) // 2

@@ -1,7 +1,7 @@
 {
   "task_id": "bug-003-binary-search",
   "repo_dir": "code",
-  "issue_description": "binary_search raises IndexError when searching for target greater than elements in array due to high index boundary",
+  "issue_description": "binary_search raises IndexError when the target is larger than every element in the array",
   "targeted_test": "tests/test_search.py -k test_search_target_greater_or_at_end",
   "regression_test": "tests/test_search.py",
   "max_attempts": 3,
