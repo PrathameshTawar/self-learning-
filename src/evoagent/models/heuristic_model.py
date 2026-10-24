@@ -51,6 +51,17 @@ class HeuristicCodingModel(IModelBackend):
                     model_name=self.model_name,
                 )
 
+        # Handle AttributeError on NoneType input
+        if "AttributeError" in prompt.failure_trace or "NoneType" in prompt.failure_trace:
+            diff = self._fix_none_attribute_error(prompt.target_file, prompt.file_content)
+            if diff:
+                return ModelResponse(
+                    hypothesis="Argument can be None, causing AttributeError on method call.",
+                    proposed_diff=diff,
+                    explanation="Guard against None input before invoking string methods.",
+                    model_name=self.model_name,
+                )
+
         # Default fallback
         return ModelResponse(
             hypothesis="Unable to determine precise failure cause with heuristics.",
@@ -89,5 +100,18 @@ class HeuristicCodingModel(IModelBackend):
                 f"@@ -1,3 +1,3 @@\n"
                 f"-    return a / b\n"
                 f"+    return a / b if b != 0 else 0"
+            )
+        return ""
+
+    def _fix_none_attribute_error(self, target_file: str, content: str) -> str:
+        """Generate unified diff for None input attribute access."""
+        if "cleaned = raw_text.strip()" in content:
+            return (
+                f"--- a/{target_file}\n"
+                f"+++ b/{target_file}\n"
+                f"@@ -1,3 +1,4 @@\n"
+                f"+    if raw_text is None:\n"
+                f"+        return \"\"\n"
+                f"     cleaned = raw_text.strip()"
             )
         return ""
