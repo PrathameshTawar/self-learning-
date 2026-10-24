@@ -99,5 +99,18 @@ class PatchTool:
             patched = orig_norm.replace(chunk_norm, new_norm, 1)
             return True, patched
 
-        # If direct chunk match fails, check if the file can be patched line by line
+        # Context-anchored insertion (e.g. inserting guard before existing statement)
+        context_anchor = None
+        for line in diff_lines:
+            if line.startswith(("---", "+++", "@@")):
+                continue
+            if line.startswith(" ") or (line and not line.startswith(("-", "+"))):
+                context_anchor = line[1:] if line.startswith(" ") else line
+                break
+
+        if not removals and additions and context_anchor:
+            if context_anchor in orig_norm:
+                patched = orig_norm.replace(context_anchor, f"{new_norm}\n{context_anchor}", 1)
+                return True, patched
+
         return False, original_text
