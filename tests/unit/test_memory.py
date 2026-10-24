@@ -1,5 +1,5 @@
 """
-Unit tests for episodic memory persistence and experience retrieval.
+Unit tests for episodic memory persistence, experience retrieval, and BM25 ranking.
 """
 
 from evoagent.domain.models import MemoryEpisodeRecord
@@ -56,3 +56,42 @@ def test_experience_retriever_formats_lessons():
     lessons = retriever.retrieve_relevant_lessons("ZeroDivisionError")
     assert len(lessons) == 1
     assert "Guard denominator against zero" in lessons[0]
+
+
+def test_bm25_memory_retrieval_ranking_and_order_independence():
+    store = InMemoryMemoryStore()
+
+    # Episode 1: Unrelated KeyError
+    store.save_episode(MemoryEpisodeRecord(
+        episode_id="ep-key",
+        task_id="bug-201",
+        issue_description="Missing config key in settings",
+        failure_signature="KeyError: 'database'",
+        target_file="config.py",
+        root_cause_hypothesis="Key lookup without get default",
+        applied_patch="return cfg.get('database', {})",
+        outcome="accepted",
+        targeted_tests_passed=True,
+        regression_tests_passed=True,
+        lessons_learned="Use .get() with defaults for optional keys",
+    ))
+
+    # Episode 2: Exact IndexError
+    store.save_episode(MemoryEpisodeRecord(
+        episode_id="ep-idx",
+        task_id="bug-202",
+        issue_description="Out of bounds list slicing on empty tokens",
+        failure_signature="IndexError: list index out of range",
+        target_file="tokenizer.py",
+        root_cause_hypothesis="Empty tokens list accessed directly",
+        applied_patch="return tokens[0] if tokens else ''",
+        outcome="accepted",
+        targeted_tests_passed=True,
+        regression_tests_passed=True,
+        lessons_learned="Guard empty tokens before index access",
+    ))
+
+    # Out-of-order query should still rank the IndexError episode #1
+    matches = store.find_by_signature("out range index list empty tokens", limit=2)
+    assert len(matches) >= 1
+    assert matches[0].episode_id == "ep-idx"
