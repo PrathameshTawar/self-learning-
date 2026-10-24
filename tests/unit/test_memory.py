@@ -95,3 +95,47 @@ def test_bm25_memory_retrieval_ranking_and_order_independence():
     matches = store.find_by_signature("out range index list empty tokens", limit=2)
     assert len(matches) >= 1
     assert matches[0].episode_id == "ep-idx"
+
+
+def _episode(episode_id: str, signature: str, patch: str, outcome: str = "accepted") -> MemoryEpisodeRecord:
+    return MemoryEpisodeRecord(
+        episode_id=episode_id,
+        task_id=f"task-{episode_id}",
+        issue_description="",
+        failure_signature=signature,
+        target_file="mod.py",
+        root_cause_hypothesis="",
+        applied_patch=patch,
+        outcome=outcome,
+        targeted_tests_passed=outcome == "accepted",
+        regression_tests_passed=outcome == "accepted",
+        lessons_learned="lesson",
+    )
+
+
+def test_bm25_returns_nothing_for_unrelated_query():
+    store = InMemoryMemoryStore()
+    store.save_episode(_episode("ep-key", "KeyError: 'database'", "return cfg.get('database', {})"))
+
+    assert store.find_by_signature("ZeroDivisionError division by zero") == []
+    assert ExperienceRetriever(store).retrieve_relevant_lessons("ZeroDivisionError: division by zero") == []
+
+
+def test_lesson_shows_changed_lines_of_search_replace_patch():
+    patch = (
+        "<<<<<<< SEARCH\n"
+        "def ratio(a, b):\n"
+        "    return a / b\n"
+        "=======\n"
+        "def ratio(a, b):\n"
+        "    return a / b if b else 0.0\n"
+        ">>>>>>> REPLACE"
+    )
+    store = InMemoryMemoryStore()
+    store.save_episode(_episode("ep-div", "ZeroDivisionError: division by zero", patch))
+
+    lessons = ExperienceRetriever(store).retrieve_relevant_lessons("ZeroDivisionError: division by zero")
+
+    assert len(lessons) == 1
+    assert "(Fix applied: return a / b if b else 0.0)" in lessons[0]
+    assert "REPLACE" not in lessons[0]

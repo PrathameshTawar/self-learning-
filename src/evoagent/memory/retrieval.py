@@ -7,6 +7,24 @@ import re
 from typing import List, Optional
 from evoagent.memory.schemas import MemoryEpisodeRecord
 from evoagent.memory.store import IMemoryStore
+from evoagent.tools.patch_tools import SEARCH_REPLACE_BLOCK_RE
+
+
+def summarize_fix(patch: str, max_lines: int = 3) -> str:
+    """Return the first few lines a patch introduces, for a compact lesson."""
+    if SEARCH_REPLACE_BLOCK_RE.search(patch):
+        new_lines = []
+        for match in SEARCH_REPLACE_BLOCK_RE.finditer(patch):
+            search_lines = set(match.group(1).splitlines())
+            new_lines.extend(line for line in match.group(2).splitlines() if line not in search_lines)
+    else:
+        new_lines = [line[1:] for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++")]
+
+    new_lines = [line.strip() for line in new_lines if line.strip()]
+    if not new_lines:
+        # Plain-text patch without diff markers: keep its last line
+        new_lines = [line.strip() for line in patch.splitlines() if line.strip()][-1:]
+    return " | ".join(new_lines[:max_lines])
 
 
 class ExperienceRetriever:
@@ -52,7 +70,7 @@ class ExperienceRetriever:
         for ep in episodes:
             if ep.outcome == "accepted" and ep.lessons_learned:
                 lessons.append(
-                    f"[Task {ep.task_id} (Resolved)]: {ep.lessons_learned} (Fix applied: {ep.applied_patch.splitlines()[-1] if ep.applied_patch else ''})"
+                    f"[Task {ep.task_id} (Resolved)]: {ep.lessons_learned} (Fix applied: {summarize_fix(ep.applied_patch)})"
                 )
             elif ep.outcome == "rejected" and ep.lessons_learned:
                 lessons.append(

@@ -50,7 +50,7 @@ class BM25Ranker:
 
         query_tokens = tokenize(query)
         if not query_tokens:
-            return episodes[:limit]
+            return []
 
         corpus_tokens = [self._episode_to_tokens(ep) for ep in episodes]
         N = len(episodes)
@@ -92,11 +92,7 @@ class BM25Ranker:
             if score > 0.0:
                 scored_episodes.append((score, ep))
 
-        # Sort descending by BM25 score
+        # Sort descending by BM25 score. Episodes sharing no terms with the query are left out:
+        # injecting unrelated "lessons" only distracts the model.
         scored_episodes.sort(key=lambda x: x[0], reverse=True)
-
-        if scored_episodes:
-            return [ep for _, ep in scored_episodes[:limit]]
-
-        # Fallback to recent episodes if no token overlaps found
-        return episodes[:limit]
+        return [ep for _, ep in scored_episodes[:limit]]
