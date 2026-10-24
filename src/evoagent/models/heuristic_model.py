@@ -1,5 +1,8 @@
 """
-Deterministic heuristic and memory-guided coding model for testing and baselines.
+Test mock heuristic coding model for unit testing and offline pipeline validation.
+IMPORTANT: This class is solely an offline test mock / fixture. It is NOT intended
+for production evaluation or real-world bug benchmark scoring. For real repair evaluation,
+use OpenAICompatibleModel paired with an LLM (e.g., Qwen2.5-Coder via Ollama/vLLM).
 """
 
 from evoagent.models.base import IModelBackend, ModelPrompt, ModelResponse
@@ -7,16 +10,15 @@ from evoagent.models.base import IModelBackend, ModelPrompt, ModelResponse
 
 class HeuristicCodingModel(IModelBackend):
     """
-    Heuristic rule-based model that can solve common boundary bugs and
-    apply retrieved memory patterns deterministically.
-    Useful for offline testing, CI/CD, and reproducible benchmarking.
+    Mock rule-based model designed specifically for offline integration tests and synthetic CI fixtures.
+    Simulates deterministic repair proposals for test fixtures without requiring an active LLM endpoint.
     """
 
-    def __init__(self, model_name: str = "heuristic-v1") -> None:
+    def __init__(self, model_name: str = "mock-heuristic-v1") -> None:
         self.model_name = model_name
 
     def generate_repair_proposal(self, prompt: ModelPrompt) -> ModelResponse:
-        """Analyze failure trace and file content to propose a targeted patch."""
+        """Analyze failure trace and file content to propose a targeted mock patch."""
         # Check if retrieved memories contain a verified patch pattern
         for lesson in prompt.retrieved_lessons:
             if "empty" in lesson.lower() and "IndexError" in prompt.failure_trace:
@@ -72,7 +74,6 @@ class HeuristicCodingModel(IModelBackend):
 
     def _fix_index_error_empty_input(self, target_file: str, content: str) -> str:
         """Generate unified diff for empty string / list index access."""
-        # Look for return parts[0].strip() or return parts[0]
         if "return parts[0].strip()" in content:
             return (
                 f"--- a/{target_file}\n"
