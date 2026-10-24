@@ -98,12 +98,12 @@ def run(task: str, memory_db: str) -> None:
     result = sm.execute_task(task_obj)
 
     if result.is_successful:
-        console.print(f"[bold green]✔ Task {result.task_id} COMPLETED SUCCESSFULLY![/]")
+        console.print(f"[bold green][PASS] Task {result.task_id} COMPLETED SUCCESSFULLY![/]")
         if result.accepted_patch:
             console.print("\n[bold]Accepted Patch Diff:[/]")
             console.print(result.accepted_patch.diff_unified)
     else:
-        console.print(f"[bold red]✘ Task {result.task_id} FAILED after {len(result.attempts)} attempts.[/]")
+        console.print(f"[bold red][FAIL] Task {result.task_id} FAILED after {len(result.attempts)} attempts.[/]")
 
     console.print(f"Total Duration: {result.total_duration_seconds}s | Final State: {result.final_state.value}")
 
