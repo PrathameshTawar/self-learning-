@@ -23,9 +23,8 @@ class DummyTestRunner(TestRunnerTool):
 
 def test_evaluator_rejects_regression_failure():
     """Verify that a patch passing targeted tests but breaking regressions is rejected."""
-    # First call: targeted test passes. Second call: regression test fails.
+    target_result = TestResult(command="pytest targeted", passed=True, exit_code=0, stdout="", stderr="", duration_seconds=0.1)
     dummy_runner = DummyTestRunner([
-        TestResult(command="pytest targeted", passed=True, exit_code=0, stdout="", stderr="", duration_seconds=0.1),
         TestResult(command="pytest regression", passed=False, exit_code=1, stdout="FAILED test_other", stderr="", duration_seconds=0.1, error_summary="FAILED test_other"),
     ])
 
@@ -39,7 +38,7 @@ def test_evaluator_rejects_regression_failure():
     )
     patch = PatchProposal(target_file="app.py", diff_unified="--- a/app.py\n+++ b/app.py\n+fixed")
 
-    score = evaluator.evaluate_repair(task, patch, dummy_runner.outcomes[0])
+    score = evaluator.evaluate_repair(task, patch, target_result)
 
     assert score.targeted_tests_passed is True
     assert score.regression_tests_passed is False
@@ -49,8 +48,8 @@ def test_evaluator_rejects_regression_failure():
 
 def test_evaluator_accepts_clean_fix():
     """Verify clean fix passing both targeted and regression suites is accepted."""
+    target_result = TestResult(command="pytest targeted", passed=True, exit_code=0, stdout="", stderr="", duration_seconds=0.1)
     dummy_runner = DummyTestRunner([
-        TestResult(command="pytest targeted", passed=True, exit_code=0, stdout="", stderr="", duration_seconds=0.1),
         TestResult(command="pytest regression", passed=True, exit_code=0, stdout="2 passed", stderr="", duration_seconds=0.1),
     ])
 
@@ -64,7 +63,7 @@ def test_evaluator_accepts_clean_fix():
     )
     patch = PatchProposal(target_file="app.py", diff_unified="--- a/app.py\n+++ b/app.py\n+fixed")
 
-    score = evaluator.evaluate_repair(task, patch, dummy_runner.outcomes[0])
+    score = evaluator.evaluate_repair(task, patch, target_result)
 
     assert score.targeted_tests_passed is True
     assert score.regression_tests_passed is True
