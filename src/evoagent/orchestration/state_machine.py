@@ -26,6 +26,10 @@ from evoagent.tools.patch_tools import PatchTool
 from evoagent.tools.search_tools import CodeSearcher
 from evoagent.tools.test_tools import TestRunnerTool
 
+# pytest exit codes meaning the targeted test never ran: 4 = usage error (e.g. path not found),
+# 5 = no tests collected (e.g. a -k filter that matches nothing)
+PYTEST_UNUSABLE_TARGET_EXIT_CODES = (4, 5)
+
 
 class TaskStateMachine:
     """
@@ -51,12 +55,18 @@ class TaskStateMachine:
         self.git_inspector = git_inspector
         self.test_runner = test_runner
 
-    def execute_task(self, task: Task, strategy: Optional[Any] = None) -> TaskResult:
+    def execute_task(
+        self,
+        task: Task,
+        strategy: Optional[Any] = None,
+        persist_episode: bool = True,
+    ) -> TaskResult:
         """
         Run the end-to-end autonomous repair loop on a task.
         Executes entirely within an isolated throwaway temporary workspace to protect
         the original repository and ensure idempotent evaluations.
         Supports strategy chromosome parameterization (Layer B).
+        Pass persist_episode=False to evaluate against frozen memory (held-out runs, tournaments).
         """
         start_time = time.perf_counter()
         attempts = []
@@ -70,10 +80,11 @@ class TaskStateMachine:
         max_patch_lines = getattr(strategy, "max_patch_lines", self.patch_tool.max_patch_lines)
         strat_temperature = getattr(strategy, "temperature", None)
         strategy_id = getattr(strategy, "strategy_id", "default")
-
-        # Configure model temperature if supported
-        if strat_temperature is not None and hasattr(self.repair_agent.model, "temperature"):
-            self.repair_agent.model.temperature = strat_temperature
+        # The task budget is a hard cap; a strategy may only choose to spend fewer attempts
+        max_attempts = min(
+            getattr(strategy, "max_repair_attempts", task.budget.max_attempts),
+            task.budget.max_attempts,
+        )
 
         with tempfile.TemporaryDirectory(prefix=f"evo_{task.task_id}_") as temp_dir:
             temp_path = Path(temp_dir)
@@ -92,15 +103,23 @@ class TaskStateMachine:
             searcher = CodeSearcher(work_dir)
             isolated_patch_tool = PatchTool(root_path=work_dir, max_patch_lines=max_patch_lines)
 
-            # 2. Pre-patch verification gate - confirm bug reproduces initially
+            # 2. Pre-patch verification gate - the targeted test must run and fail before any patch
             pre_test: TestResult = self.evaluator.verify_reproduction(isolated_task)
+            invalid_reason: Optional[str] = None
             if pre_test.passed:
-                # Targeted test already passes before patch - invalid task definition
+                invalid_reason = "Task rejected: targeted test already passed pre-patch without any bug reproduction."
+            elif pre_test.exit_code in PYTEST_UNUSABLE_TARGET_EXIT_CODES:
+                invalid_reason = (
+                    f"Task rejected: targeted test did not run (pytest exit code {pre_test.exit_code}: "
+                    "usage error or no tests collected). Check the targeted_test path and -k filter."
+                )
+
+            if invalid_reason:
                 invalid_record = AttemptRecord(
                     attempt_number=1,
                     state=TaskState.INVALID_TASK,
                     pre_test_result=pre_test,
-                    hypothesis="Task rejected: targeted test already passed pre-patch without any bug reproduction.",
+                    hypothesis=invalid_reason,
                 )
                 attempts.append(invalid_record)
                 total_duration = time.perf_counter() - start_time
@@ -119,7 +138,7 @@ class TaskStateMachine:
             prev_attempt_patch: Optional[str] = None
             prev_attempt_error: Optional[str] = None
 
-            for attempt_no in range(1, task.budget.max_attempts + 1):
+            for attempt_no in range(1, max_attempts + 1):
                 attempt_record = AttemptRecord(
                     attempt_number=attempt_no,
                     state=TaskState.ANALYZING,
@@ -138,6 +157,7 @@ class TaskStateMachine:
                     retrieval_policy=retrieval_policy,
                     retrieval_top_k=retrieval_top_k,
                     enable_multi_file_context=enable_multi_file,
+                    temperature=strat_temperature,
                 )
                 attempt_record.state = TaskState.PLANNED
 
@@ -185,9 +205,11 @@ class TaskStateMachine:
                     accepted_patch = candidate_patch
                     break
                 else:
-                    # Capture failed patch and test error to feed into next attempt
+                    # Capture failed patch and the actual post-patch test failure for the next attempt
                     prev_attempt_patch = candidate_patch.diff_unified
-                    prev_attempt_error = evaluation.feedback or post_test.error_summary or post_test.stderr
+                    prev_attempt_error = "\n".join(
+                        part for part in (evaluation.feedback, post_test.error_summary) if part
+                    ) or post_test.stderr
                     # Clean reset before next attempt
                     shutil.rmtree(work_dir, ignore_errors=True)
                     shutil.copytree(clean_dir, work_dir)
@@ -223,7 +245,8 @@ class TaskStateMachine:
                 lessons_learned=lessons,
                 strategy_id=strategy_id,
             )
-            self.memory_store.save_episode(episode)
+            if persist_episode:
+                self.memory_store.save_episode(episode)
 
             return TaskResult(
                 task_id=task.task_id,

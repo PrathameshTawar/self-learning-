@@ -81,6 +81,7 @@ class TaskPlanner:
         retrieval_policy: str = "signature_match",
         retrieval_top_k: int = 3,
         enable_multi_file_context: bool = True,
+        temperature: Optional[float] = None,
     ) -> ModelPrompt:
         """Construct prompt incorporating strategy genes, context, retry feedback, and memory lessons."""
         signature = self.extract_failure_signature(pre_test)
@@ -130,4 +131,5 @@ class TaskPlanner:
             previous_attempt_patch=previous_attempt_patch,
             previous_attempt_error=previous_attempt_error,
             system_instruction=style_instruction,
+            temperature=temperature,
         )

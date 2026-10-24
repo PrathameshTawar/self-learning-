@@ -20,6 +20,7 @@ class ModelPrompt(BaseModel):
     previous_attempt_patch: Optional[str] = None
     previous_attempt_error: Optional[str] = None
     system_instruction: Optional[str] = None
+    temperature: Optional[float] = None
 
 
 class ModelResponse(BaseModel):
