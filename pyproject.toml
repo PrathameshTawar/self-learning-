@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evoagent"
+version = "0.1.0"
+description = "EvoAgent: A Self-Learning Autonomous Coding and Repair Agent"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Prathamesh Taware", email = "tawareprathamesh7@gmail.com" }
+]
+keywords = [
+    "ai-agent",
+    "self-learning",
+    "autonomous-coding",
+    "langgraph",
+    "code-repair",
+    "machine-learning"
+]
+dependencies = [
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0",
+    "click>=8.1.0",
+    "rich>=13.7.0",
+    "structlog>=24.1.0",
+    "pytest>=8.0.0",
+    "httpx>=0.27.0"
+]
+
+[project.optional-dependencies]
+advanced = [
+    "langgraph>=0.0.30",
+    "langchain-core>=0.1.30",
+    "sqlalchemy>=2.0.25",
+    "psycopg[binary]>=3.1.18",
+    "pgvector>=0.2.5",
+    "redis>=5.0.1"
+]
+training = [
+    "torch>=2.2.0",
+    "transformers>=4.38.0",
+    "peft>=0.9.0",
+    "trl>=0.7.11",
+    "accelerate>=0.27.0",
+    "bitsandbytes>=0.42.0",
+    "datasets>=2.17.0"
+]
+dev = [
+    "ruff>=0.3.0",
+    "mypy>=1.8.0",
+    "pytest-cov>=4.1.0"
+]
+
+[project.scripts]
+evoagent = "evoagent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
