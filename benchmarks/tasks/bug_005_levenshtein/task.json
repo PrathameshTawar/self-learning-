@@ -1,0 +1,13 @@
+{
+  "task_id": "bug-005-levenshtein",
+  "repo_dir": "code",
+  "issue_description": "levenshtein_distance returns 0 instead of string length when one input string is empty due to incorrect matrix boundary initialization",
+  "targeted_test": "tests/test_distance.py -k test_empty_string_boundary",
+  "regression_test": "tests/test_distance.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "distance.py",
+    "failure_type": "AssertionError"
+  }
+}
