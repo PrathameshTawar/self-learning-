@@ -1,0 +1,13 @@
+{
+  "train_tasks": [
+    "bug-001-parser",
+    "bug-002-multifile",
+    "bug-003-binary-search"
+  ],
+  "held_out_tasks": [
+    "bug-004-dict-merge",
+    "bug-005-levenshtein",
+    "bug-006-rate-limiter"
+  ],
+  "description": "Fixed train vs. held-out benchmark split for evaluating self-learning and memory transfer."
+}
