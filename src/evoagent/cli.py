@@ -149,5 +149,15 @@ def export_dataset(output: str, memory_db: str) -> None:
     console.print(f"[bold green]Successfully exported training dataset to {out_path}[/]")
 
 
+@main.command()
+@click.option("--port", "-p", default=8080, help="Port to serve the dashboard on")
+@click.option("--no-browser", is_flag=True, help="Do not open browser automatically")
+def dashboard(port: int, no_browser: bool) -> None:
+    """Launch the interactive EvoAgent web dashboard."""
+    from evoagent.dashboard.server import start_dashboard
+    console.print(Panel(f"[bold green]Launching EvoAgent Web Dashboard at http://localhost:{port}[/]"))
+    start_dashboard(port=port, open_browser=not no_browser)
+
+
 if __name__ == "__main__":
     main()
