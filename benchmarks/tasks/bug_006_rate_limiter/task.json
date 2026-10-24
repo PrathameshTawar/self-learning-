@@ -1,0 +1,13 @@
+{
+  "task_id": "bug-006-rate-limiter",
+  "repo_dir": "code",
+  "issue_description": "is_rate_limited filters historical timestamps with inverted inequality, permitting requests that exceed the rate limit",
+  "targeted_test": "tests/test_limiter.py -k test_requests_exceeding_rate_limit_rejected",
+  "regression_test": "tests/test_limiter.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "limiter.py",
+    "failure_type": "AssertionError"
+  }
+}
