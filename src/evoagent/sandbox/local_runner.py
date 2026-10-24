@@ -99,10 +99,11 @@ class LocalSubprocessSandbox(ISandboxRunner):
 
         preexec = None
         if os.name != "nt":
-            preexec = lambda: _set_posix_resource_limits(
-                max_memory_mb=self.max_memory_mb,
-                max_cpu_seconds=timeout_seconds,
-            )
+            def preexec() -> None:
+                _set_posix_resource_limits(
+                    max_memory_mb=self.max_memory_mb,
+                    max_cpu_seconds=timeout_seconds,
+                )
 
         try:
             process = subprocess.run(
@@ -140,7 +141,7 @@ class LocalSubprocessSandbox(ISandboxRunner):
                 timed_out=True,
             )
 
-        except (FileNotFoundError, PermissionError) as exc:
+        except (FileNotFoundError, PermissionError):
             # Fallback for Windows executables requiring shell resolution
             if os.name == "nt":
                 try:
