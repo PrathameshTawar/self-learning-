@@ -66,8 +66,10 @@ class TaskPlanner:
         pre_test: TestResult,
         searcher: CodeSearcher,
         attempt: int = 1,
+        previous_attempt_patch: Optional[str] = None,
+        previous_attempt_error: Optional[str] = None,
     ) -> ModelPrompt:
-        """Construct prompt with multi-file AST context, failure trace, and memory lessons."""
+        """Construct prompt with multi-file AST context, failure trace, retry feedback, and memory lessons."""
         signature = self.extract_failure_signature(pre_test)
         target_file = self.locate_target_file(task, pre_test, searcher)
 
@@ -101,4 +103,6 @@ class TaskPlanner:
             file_content=content,
             retrieved_lessons=lessons,
             attempt_number=attempt,
+            previous_attempt_patch=previous_attempt_patch,
+            previous_attempt_error=previous_attempt_error,
         )
