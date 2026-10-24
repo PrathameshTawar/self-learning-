@@ -1,0 +1,14 @@
+{
+  "task_id": "bug-002-multifile",
+  "repo_dir": "code",
+  "issue_description": "process_order in service.py crashes with AttributeError when validator.normalize_and_validate receives None",
+  "targeted_test": "tests/test_service.py -k test_process_none_input",
+  "regression_test": "tests/test_service.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "validator.py",
+    "calling_file": "service.py",
+    "failure_type": "AttributeError"
+  }
+}
