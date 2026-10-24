@@ -79,7 +79,7 @@ class EvolutionaryTournament:
                 results.append(res)
 
             metrics = BenchmarkMetricsCalculator.calculate_metrics(results)
-            fitness = chrom.compute_fitness(
+            chrom.compute_fitness(
                 resolution_rate=metrics["resolution_rate_percent"],
                 regression_free_rate=metrics["regression_free_rate_percent"],
                 avg_duration_seconds=metrics["average_duration_seconds"],
