@@ -53,6 +53,8 @@ class PatchProposal(BaseModel):
 class TestResult(BaseModel):
     """Execution output and metrics from running a test suite."""
 
+    __test__ = False
+
     command: str
     passed: bool
     exit_code: int
@@ -116,3 +118,7 @@ class MemoryEpisode(BaseModel):
     strategy_id: str = "default"
     model_version: str = "baseline"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# Alias for backward compatibility across modules
+MemoryEpisodeRecord = MemoryEpisode
