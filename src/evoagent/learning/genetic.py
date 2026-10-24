@@ -2,10 +2,11 @@
 Genetic strategy representation, mutation, crossover, and fitness evaluation (Layer B).
 """
 
-import random
-import uuid
 from enum import Enum
+from pathlib import Path
+import random
 from typing import Optional
+import uuid
 from pydantic import BaseModel, Field
 
 
@@ -74,7 +75,7 @@ class GeneticStrategyMutator:
 
     @staticmethod
     def mutate(parent: StrategyChromosome, mutation_rate: float = 0.3) -> StrategyChromosome:
-        """Create a mutated offspring with perturbed hyperparameters."""
+        """Create a mutated offspring with perturbed hyperparameters across all genes."""
         mutated = parent.model_copy(deep=True)
         mutated.strategy_id = f"strat-{uuid.uuid4().hex[:8]}"
         mutated.generation = parent.generation + 1
@@ -92,20 +93,27 @@ class GeneticStrategyMutator:
             mutated.max_repair_attempts = max(1, min(6, parent.max_repair_attempts + random.choice([-1, 1])))
 
         if random.random() < mutation_rate:
+            mutated.max_patch_lines = max(30, min(500, parent.max_patch_lines + random.choice([-25, 25])))
+
+        if random.random() < mutation_rate:
+            mutated.temperature = round(max(0.0, min(1.0, parent.temperature + random.choice([-0.1, 0.1]))), 2)
+
+        if random.random() < mutation_rate:
             mutated.enable_multi_file_context = not parent.enable_multi_file_context
 
         return mutated
 
     @staticmethod
     def crossover(parent_a: StrategyChromosome, parent_b: StrategyChromosome) -> StrategyChromosome:
-        """Combine dominant genes from two high-fitness strategy parents."""
-        child = StrategyChromosome(
+        """Combine dominant genes from two high-fitness strategy parents across all genes."""
+        return StrategyChromosome(
             strategy_id=f"strat-{uuid.uuid4().hex[:8]}",
             prompt_style=parent_a.prompt_style if random.random() > 0.5 else parent_b.prompt_style,
             retrieval_top_k=random.choice([parent_a.retrieval_top_k, parent_b.retrieval_top_k]),
             retrieval_policy=parent_a.retrieval_policy if random.random() > 0.5 else parent_b.retrieval_policy,
             max_repair_attempts=max(parent_a.max_repair_attempts, parent_b.max_repair_attempts),
+            max_patch_lines=random.choice([parent_a.max_patch_lines, parent_b.max_patch_lines]),
+            temperature=round(random.choice([parent_a.temperature, parent_b.temperature]), 2),
             enable_multi_file_context=parent_a.enable_multi_file_context or parent_b.enable_multi_file_context,
             generation=max(parent_a.generation, parent_b.generation) + 1,
         )
-        return child
