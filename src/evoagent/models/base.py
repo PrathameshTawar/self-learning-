@@ -17,6 +17,8 @@ class ModelPrompt(BaseModel):
     file_content: str
     retrieved_lessons: List[str] = Field(default_factory=list)
     attempt_number: int = 1
+    previous_attempt_patch: Optional[str] = None
+    previous_attempt_error: Optional[str] = None
     system_instruction: Optional[str] = None
 
 
