@@ -118,6 +118,7 @@ class MemoryEpisode(BaseModel):
     strategy_id: str = "default"
     model_version: str = "baseline"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 # Alias for backward compatibility across modules
