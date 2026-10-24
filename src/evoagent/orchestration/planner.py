@@ -67,14 +67,24 @@ class TaskPlanner:
         searcher: CodeSearcher,
         attempt: int = 1,
     ) -> ModelPrompt:
-        """Construct prompt with context, failure trace, and memory lessons."""
+        """Construct prompt with multi-file AST context, failure trace, and memory lessons."""
         signature = self.extract_failure_signature(pre_test)
         target_file = self.locate_target_file(task, pre_test, searcher)
 
+        # Assemble multi-file context via AST symbol navigation
         try:
-            content = searcher.read_file(target_file)
+            from evoagent.intelligence.context_builder import MultiFileContextBuilder
+            builder = MultiFileContextBuilder(task.repository_path)
+            ctx = builder.build_context(
+                primary_file=target_file,
+                failure_trace=f"{pre_test.stdout}\n{pre_test.stderr}",
+            )
+            content = ctx["formatted_context"]
         except Exception:
-            content = ""
+            try:
+                content = searcher.read_file(target_file)
+            except Exception:
+                content = ""
 
         # Retrieve verified lessons from past experiences
         lessons = self.retriever.retrieve_relevant_lessons(
