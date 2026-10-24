@@ -41,11 +41,21 @@ class OpenAICompatibleModel(IModelBackend):
 
     def _build_user_message(self, prompt: ModelPrompt) -> str:
         lessons_text = "\n".join(f"- {l}" for l in prompt.retrieved_lessons) if prompt.retrieved_lessons else "None"
+        retry_feedback = ""
+        if prompt.previous_attempt_patch:
+            retry_feedback = (
+                f"\n=== PREVIOUS FAILED ATTEMPT (Attempt #{prompt.attempt_number - 1}) ===\n"
+                f"Patch Attempted:\n{prompt.previous_attempt_patch}\n"
+                f"Resulting Error / Output:\n{prompt.previous_attempt_error or 'Test failed'}\n"
+                "INSTRUCTION: The previous patch failed to resolve the issue. Analyze why it failed and propose an alternative repair.\n\n"
+            )
+
         return (
             f"Task ID: {prompt.task_id}\n"
             f"Target File: {prompt.target_file}\n"
             f"Issue: {prompt.issue_description}\n"
             f"Failure Stack Trace:\n{prompt.failure_trace}\n\n"
+            f"{retry_feedback}"
             f"Relevant Lessons from Past Experience:\n{lessons_text}\n\n"
             f"Current File Content:\n{prompt.file_content}\n\n"
             "Provide your hypothesis and unified diff fix."
