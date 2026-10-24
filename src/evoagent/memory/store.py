@@ -1,12 +1,14 @@
 """
 Memory store implementations: SQLite persistent store and In-Memory test store.
+Uses BM25 ranking for robust, order-independent failure trace and issue retrieval.
 """
 
 import json
+from pathlib import Path
 import sqlite3
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import List, Optional
+from evoagent.memory.bm25 import BM25Ranker
 from evoagent.memory.schemas import MemoryEpisodeRecord
 
 
@@ -30,16 +32,17 @@ class IMemoryStore(ABC):
 
     @abstractmethod
     def find_by_signature(self, signature: str, limit: int = 5) -> List[MemoryEpisodeRecord]:
-        """Find past episodes matching a failure signature or exception type."""
+        """Find past episodes matching a failure signature or exception type using BM25 ranking."""
         pass
 
 
 class SQLiteMemoryStore(IMemoryStore):
-    """Local SQLite-backed episodic memory with zero external dependencies."""
+    """Local SQLite-backed episodic memory with BM25 ranking."""
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.ranker = BM25Ranker()
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -134,28 +137,17 @@ class SQLiteMemoryStore(IMemoryStore):
             return [self._row_to_record(r) for r in cursor.fetchall()]
 
     def find_by_signature(self, signature: str, limit: int = 5) -> List[MemoryEpisodeRecord]:
-        """Find past episodes with matching failure signature terms."""
-        terms = [t.strip() for t in signature.split() if len(t.strip()) > 3]
-        query = "%" + "%".join(terms[:3]) + "%" if terms else f"%{signature}%"
-
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM episodes 
-                WHERE (failure_signature LIKE ? OR issue_description LIKE ?)
-                ORDER BY CASE WHEN outcome = 'accepted' THEN 1 ELSE 2 END, created_at DESC 
-                LIMIT ?
-                """,
-                (query, query, limit),
-            )
-            return [self._row_to_record(r) for r in cursor.fetchall()]
+        """Find past episodes using BM25 relevance scoring over stored episodes."""
+        candidates = self.get_all_episodes(limit=200)
+        return self.ranker.rank(query=signature, episodes=candidates, limit=limit)
 
 
 class InMemoryMemoryStore(IMemoryStore):
-    """Ephemeral memory store for isolated unit tests."""
+    """Ephemeral memory store for isolated unit tests with BM25 ranking."""
 
     def __init__(self) -> None:
         self.episodes: List[MemoryEpisodeRecord] = []
+        self.ranker = BM25Ranker()
 
     def save_episode(self, episode: MemoryEpisodeRecord) -> None:
         self.episodes.append(episode)
@@ -167,5 +159,5 @@ class InMemoryMemoryStore(IMemoryStore):
         return [e for e in self.episodes if e.outcome == "accepted"]
 
     def find_by_signature(self, signature: str, limit: int = 5) -> List[MemoryEpisodeRecord]:
-        matches = [e for e in self.episodes if signature.lower() in e.failure_signature.lower() or signature.lower() in e.issue_description.lower()]
-        return matches[:limit]
+        """Rank in-memory episodes using BM25."""
+        return self.ranker.rank(query=signature, episodes=self.episodes, limit=limit)
