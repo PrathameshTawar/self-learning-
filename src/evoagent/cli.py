@@ -16,8 +16,7 @@ from evoagent.evaluation.evaluator import IndependentEvaluator
 from evoagent.learning.dataset import DatasetCurator
 from evoagent.memory.retrieval import ExperienceRetriever
 from evoagent.memory.store import SQLiteMemoryStore
-from evoagent.models.heuristic_model import HeuristicCodingModel
-from evoagent.models.open_model import OpenAICompatibleModel
+from evoagent.models.factory import create_model_backend
 from evoagent.orchestration.planner import TaskPlanner
 from evoagent.orchestration.repair_agent import RepairAgent
 from evoagent.orchestration.state_machine import TaskStateMachine
@@ -38,15 +37,9 @@ def _build_state_machine(memory_path: Path) -> TaskStateMachine:
     retriever = ExperienceRetriever(memory_store)
     planner = TaskPlanner(retriever)
 
-    # Choose model backend based on settings
-    if settings.model_provider == "openai_compatible" or settings.model_provider == "ollama":
-        model_backend = OpenAICompatibleModel(
-            base_url=settings.api_base_url,
-            model_name=settings.model_name,
-            api_key=settings.api_key,
-        )
-    else:
-        model_backend = HeuristicCodingModel()
+    model_backend = create_model_backend(
+        settings.model_provider, settings.model_name, settings.api_base_url, settings.api_key
+    )
 
     git_inspector = GitInspector(sandbox)
     patch_tool = PatchTool(root_path=Path("."))
