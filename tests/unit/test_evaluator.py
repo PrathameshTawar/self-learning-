@@ -3,7 +3,7 @@ Unit tests for IndependentEvaluator regression verification and authority enforc
 """
 
 from pathlib import Path
-from evoagent.domain.models import ExecutionBudget, PatchProposal, Task, TestResult
+from evoagent.domain.models import PatchProposal, Task, TestResult
 from evoagent.evaluation.evaluator import IndependentEvaluator
 from evoagent.tools.test_tools import TestRunnerTool
 
