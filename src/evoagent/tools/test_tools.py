@@ -23,7 +23,7 @@ class TestRunnerTool:
         test_path: str,
         cwd: Path,
         timeout_seconds: int = 60,
-        extra_flags: str = "-q --tb=short",
+        extra_flags: str = "-q --tb=short -p no:deepeval",
     ) -> TestResult:
         """Run pytest on a specified test file or node and return parsed TestResult."""
         command = f'"{self.python_executable}" -m pytest {extra_flags} {test_path}'
@@ -31,6 +31,7 @@ class TestRunnerTool:
             command=command,
             cwd=cwd,
             timeout_seconds=timeout_seconds,
+            extra_env={"DEEPEVAL_TELEMETRY_OPT_OUT": "YES", "PYTHONIOENCODING": "utf-8"},
         )
 
         error_summary = None
