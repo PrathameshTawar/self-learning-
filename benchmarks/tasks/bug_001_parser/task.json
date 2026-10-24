@@ -1,0 +1,13 @@
+{
+  "task_id": "bug-001-parser",
+  "repo_dir": "code",
+  "issue_description": "first_field raises IndexError on empty input or whitespace strings",
+  "targeted_test": "tests/test_parser.py -k test_empty_input",
+  "regression_test": "tests/test_parser.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "parser.py",
+    "failure_type": "IndexError"
+  }
+}
