@@ -1,8 +1,10 @@
 """
 Experience retrieval engine to provide historical lessons to the planner.
+Supports configurable retrieval policies and top_k parameters from strategy chromosomes.
 """
 
-from typing import List
+import re
+from typing import List, Optional
 from evoagent.memory.schemas import MemoryEpisodeRecord
 from evoagent.memory.store import IMemoryStore
 
@@ -20,10 +22,30 @@ class ExperienceRetriever:
         self,
         failure_signature: str,
         issue_description: str = "",
+        failure_trace: str = "",
         max_results: int = 3,
+        policy: str = "signature_match",
     ) -> List[str]:
-        """Query memory store and return formatted, verified lessons."""
-        query = f"{failure_signature} {issue_description}".strip()
+        """
+        Query memory store using the specified retrieval policy:
+        - signature_match: Combines primary failure signature and issue description.
+        - error_type_only: Isolates the Exception/Error class name for broad pattern retrieval.
+        - bm25_semantic: Uses full failure trace stack and issue description for deep context.
+        """
+        policy_str = str(policy).lower()
+
+        if "error_type" in policy_str:
+            # Extract Exception name alone (e.g., IndexError, ZeroDivisionError)
+            match = re.search(r"([A-Za-z]+Error|Exception)", failure_signature)
+            query = match.group(1) if match else failure_signature
+        elif "bm25" in policy_str or "semantic" in policy_str:
+            # Deep failure trace search
+            trace_snippet = "\n".join(failure_trace.strip().splitlines()[-6:]) if failure_trace else ""
+            query = f"{failure_signature} {issue_description} {trace_snippet}".strip()
+        else:
+            # Standard signature match
+            query = f"{failure_signature} {issue_description}".strip()
+
         episodes = self.memory_store.find_by_signature(query, limit=max_results * 2)
 
         lessons = []
