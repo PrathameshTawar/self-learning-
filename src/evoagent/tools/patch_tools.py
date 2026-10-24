@@ -7,6 +7,13 @@ import re
 from typing import List, Optional, Tuple
 from evoagent.domain.models import PatchProposal
 
+# One SEARCH/REPLACE block. Either section may be empty; the divider and closing marker must start a line.
+SEARCH_REPLACE_BLOCK_RE = re.compile(
+    r"<<<<<<<[ \t]*SEARCH[ \t]*\r?\n(.*?)^=======[ \t]*\r?\n(.*?)^>>>>>>>[ \t]*REPLACE",
+    re.DOTALL | re.MULTILINE,
+)
+HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)")
+
 
 class PatchTool:
     """
@@ -70,9 +77,9 @@ class PatchTool:
                 return False, f"Search/Replace block application failed: {err_msg}"
         else:
             # 2. Fall back to unified diff hunks
-            success, new_content = self._apply_hunks(original_content, patch.diff_unified)
+            success, new_content, err_msg = self._apply_hunks(original_content, patch.diff_unified)
             if not success:
-                return False, "Failed to apply diff hunks to original file content"
+                return False, f"Failed to apply diff hunks: {err_msg}"
 
         try:
             target_file.write_text(new_content, encoding="utf-8")
@@ -82,82 +89,110 @@ class PatchTool:
             target_file.write_text(original_content, encoding="utf-8")
             return False, f"Error writing patched content: {str(exc)}"
 
+    @staticmethod
+    def _split_block(block: str) -> List[str]:
+        """Split a SEARCH/REPLACE section into lines, dropping the newline that ends the section."""
+        if block.endswith("\n"):
+            block = block[:-1]
+        return block.split("\n") if block else []
+
+    @staticmethod
+    def _find_block(
+        lines: List[str], block: List[str], hint: Optional[int] = None
+    ) -> Tuple[Optional[int], Optional[str]]:
+        """
+        Locate block as consecutive whole lines: exact match first, then ignoring trailing whitespace.
+        Returns (start_index, None) or (None, error). Several matches are ambiguous unless a 0-based
+        line hint is given, in which case the closest match wins.
+        """
+        if not block:
+            return None, "has no lines to anchor it"
+
+        size = len(block)
+        for normalize in (None, str.rstrip):
+            haystack = lines if normalize is None else [normalize(l) for l in lines]
+            needle = block if normalize is None else [normalize(l) for l in block]
+            matches = [i for i in range(len(haystack) - size + 1) if haystack[i:i + size] == needle]
+            if len(matches) == 1:
+                return matches[0], None
+            if len(matches) > 1:
+                if hint is not None:
+                    return min(matches, key=lambda i: abs(i - hint)), None
+                return None, f"matches {len(matches)} locations; include more surrounding lines to make it unique"
+
+        return None, "was not found in target file"
+
     def _apply_search_replace_blocks(
         self, original_text: str, patch_text: str
     ) -> Tuple[bool, str, Optional[str]]:
         """
-        Extract and apply <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE blocks.
-        Supports multiple consecutive blocks within a single file.
+        Apply <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE blocks in order.
+        Each SEARCH section must match whole lines exactly once; an empty REPLACE deletes the lines.
         """
-        pattern = re.compile(
-            r"<<<<<<<\s*SEARCH\r?\n(.*?)\r?\n=======\r?\n(.*?)\r?\n>>>>>>>\s*REPLACE",
-            re.DOTALL,
-        )
-        matches = list(pattern.finditer(patch_text))
+        matches = list(SEARCH_REPLACE_BLOCK_RE.finditer(patch_text.replace("\r\n", "\n")))
         if not matches:
             return False, original_text, "Malformed SEARCH/REPLACE syntax."
 
-        current_text = original_text.replace("\r\n", "\n")
-
+        lines = original_text.replace("\r\n", "\n").split("\n")
         for idx, match in enumerate(matches, 1):
-            search_block = match.group(1).replace("\r\n", "\n")
-            replace_block = match.group(2).replace("\r\n", "\n")
+            search_lines = self._split_block(match.group(1))
+            replace_lines = self._split_block(match.group(2))
+            start, error = self._find_block(lines, search_lines)
+            if start is None:
+                preview = "\n".join(search_lines)
+                preview = preview[:60] + "..." if len(preview) > 60 else preview
+                return False, original_text, f"SEARCH block #{idx} {error}: {preview!r}"
+            lines[start:start + len(search_lines)] = replace_lines
 
-            if search_block in current_text:
-                current_text = current_text.replace(search_block, replace_block, 1)
-            else:
-                # Flexible whitespace fallback: trim trailing whitespace per line
-                s_trimmed = "\n".join(l.rstrip() for l in search_block.splitlines())
-                c_trimmed = "\n".join(l.rstrip() for l in current_text.splitlines())
-                if s_trimmed in c_trimmed:
-                    # Reconstruct replacement
-                    current_text = c_trimmed.replace(s_trimmed, replace_block, 1)
-                else:
-                    preview = search_block[:60] + "..." if len(search_block) > 60 else search_block
-                    return False, original_text, f"SEARCH block #{idx} not found in target file: {preview!r}"
+        return True, "\n".join(lines), None
 
-        return True, current_text, None
+    @staticmethod
+    def _parse_hunks(diff_text: str) -> List[Tuple[Optional[int], List[str], List[str]]]:
+        """Split a unified diff into (0-based line hint, before_lines, after_lines) per hunk."""
+        hunks: List[Tuple[Optional[int], List[str], List[str]]] = []
+        current: Optional[Tuple[Optional[int], List[str], List[str]]] = None
 
-    def _apply_hunks(self, original_text: str, diff_text: str) -> Tuple[bool, str]:
-        """
-        Lightweight unified diff applicator for standard diff hunks.
-        """
-        diff_lines = diff_text.strip().splitlines()
-
-        removals = []
-        additions = []
-
-        for line in diff_lines:
-            if line.startswith("---") or line.startswith("+++") or line.startswith("@@"):
+        for line in diff_text.replace("\r\n", "\n").rstrip("\n").split("\n"):
+            if line.startswith("@@"):
+                header = HUNK_HEADER_RE.match(line)
+                current = (int(header.group(1)) - 1 if header else None, [], [])
+                hunks.append(current)
                 continue
+            if current is None:
+                # File headers and preamble before the first hunk
+                if not line or line.startswith(("--- ", "+++ ", "diff ", "index ")) or line in ("---", "+++"):
+                    continue
+                current = (None, [], [])
+                hunks.append(current)
+            if line.startswith("\\"):
+                continue  # "\ No newline at end of file"
             if line.startswith("-"):
-                removals.append(line[1:])
+                current[1].append(line[1:])
             elif line.startswith("+"):
-                additions.append(line[1:])
+                current[2].append(line[1:])
+            else:
+                context = line[1:] if line.startswith(" ") else line
+                current[1].append(context)
+                current[2].append(context)
 
-        orig_chunk = "\n".join(removals)
-        new_chunk = "\n".join(additions)
+        return [hunk for hunk in hunks if hunk[1] or hunk[2]]
 
-        orig_norm = original_text.replace("\r\n", "\n")
-        chunk_norm = orig_chunk.replace("\r\n", "\n")
-        new_norm = new_chunk.replace("\r\n", "\n")
+    def _apply_hunks(self, original_text: str, diff_text: str) -> Tuple[bool, str, Optional[str]]:
+        """
+        Apply unified diff hunks by content: each hunk's context and removed lines must match whole
+        lines in the file. Line numbers from @@ headers only break ties, so stale numbers are tolerated.
+        """
+        hunks = self._parse_hunks(diff_text)
+        if not hunks:
+            return False, original_text, "no hunks found in diff"
 
-        if chunk_norm and chunk_norm in orig_norm:
-            patched = orig_norm.replace(chunk_norm, new_norm, 1)
-            return True, patched
+        lines = original_text.replace("\r\n", "\n").split("\n")
+        offset = 0
+        for idx, (hint, before, after) in enumerate(hunks, 1):
+            start, error = self._find_block(lines, before, None if hint is None else hint + offset)
+            if start is None:
+                return False, original_text, f"hunk #{idx} {error}"
+            lines[start:start + len(before)] = after
+            offset += len(after) - len(before)
 
-        # Context-anchored insertion
-        context_anchor = None
-        for line in diff_lines:
-            if line.startswith(("---", "+++", "@@")):
-                continue
-            if line.startswith(" ") or (line and not line.startswith(("-", "+"))):
-                context_anchor = line[1:] if line.startswith(" ") else line
-                break
-
-        if not removals and additions and context_anchor:
-            if context_anchor in orig_norm:
-                patched = orig_norm.replace(context_anchor, f"{new_norm}\n{context_anchor}", 1)
-                return True, patched
-
-        return False, original_text
+        return True, "\n".join(lines), None

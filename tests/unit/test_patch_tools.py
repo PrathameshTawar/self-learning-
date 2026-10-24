@@ -121,3 +121,94 @@ def test_apply_search_replace_multiple_blocks(tmp_path: Path):
     assert "x = 100" in updated
     assert "y = 20" in updated
     assert "z = 300" in updated
+
+
+def _apply(tmp_path: Path, content: str, patch_text: str):
+    code_file = tmp_path / "mod.py"
+    code_file.write_text(content, encoding="utf-8")
+    success, msg = PatchTool(root_path=tmp_path).apply_unified_diff(
+        PatchProposal(target_file="mod.py", diff_unified=patch_text)
+    )
+    return success, msg, code_file.read_text(encoding="utf-8")
+
+
+def test_search_replace_matches_whole_lines_only(tmp_path: Path):
+    # "x = 1" is also a substring of "max_x = 1"; only the real line may change
+    success, msg, updated = _apply(
+        tmp_path,
+        "max_x = 1\nx = 1\n",
+        "<<<<<<< SEARCH\nx = 1\n=======\nx = 2\n>>>>>>> REPLACE",
+    )
+    assert success, msg
+    assert updated == "max_x = 1\nx = 2\n"
+
+
+def test_search_replace_rejects_ambiguous_match(tmp_path: Path):
+    original = "def a():\n    return None\n\ndef b():\n    return None\n"
+    success, msg, updated = _apply(
+        tmp_path,
+        original,
+        "<<<<<<< SEARCH\n    return None\n=======\n    return 0\n>>>>>>> REPLACE",
+    )
+    assert not success
+    assert "matches 2 locations" in msg
+    assert updated == original
+
+
+def test_search_replace_empty_replace_deletes_lines(tmp_path: Path):
+    success, msg, updated = _apply(
+        tmp_path,
+        "a = 1\nprint('debug')\nb = 2\n",
+        "<<<<<<< SEARCH\nprint('debug')\n=======\n>>>>>>> REPLACE",
+    )
+    assert success, msg
+    assert updated == "a = 1\nb = 2\n"
+
+
+def test_search_replace_tolerates_trailing_whitespace_and_keeps_final_newline(tmp_path: Path):
+    success, msg, updated = _apply(
+        tmp_path,
+        "a = 1   \nb = 2\n",
+        "<<<<<<< SEARCH\na = 1\n=======\na = 10\n>>>>>>> REPLACE",
+    )
+    assert success, msg
+    assert updated == "a = 10\nb = 2\n"
+
+
+def test_unified_diff_applies_multiple_hunks_with_context(tmp_path: Path):
+    original = (
+        "def low(xs):\n"
+        "    return xs[0]\n"
+        "\n"
+        "def high(xs):\n"
+        "    return xs[-1]\n"
+    )
+    diff = (
+        "--- a/mod.py\n"
+        "+++ b/mod.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def low(xs):\n"
+        "-    return xs[0]\n"
+        "+    return xs[0] if xs else None\n"
+        "@@ -4,2 +4,2 @@\n"
+        " def high(xs):\n"
+        "-    return xs[-1]\n"
+        "+    return xs[-1] if xs else None\n"
+    )
+    success, msg, updated = _apply(tmp_path, original, diff)
+    assert success, msg
+    assert updated == (
+        "def low(xs):\n"
+        "    return xs[0] if xs else None\n"
+        "\n"
+        "def high(xs):\n"
+        "    return xs[-1] if xs else None\n"
+    )
+
+
+def test_unified_diff_uses_hunk_line_number_to_break_ties(tmp_path: Path):
+    original = "total = 0\nstep()\ntotal = 0\nstep()\n"
+    diff = "@@ -3,1 +3,1 @@\n-total = 0\n+total = 1\n"
+    success, msg, updated = _apply(tmp_path, original, diff)
+    assert success, msg
+    assert updated == "total = 0\nstep()\ntotal = 1\nstep()\n"
