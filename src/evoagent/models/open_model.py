@@ -10,6 +10,12 @@ import httpx
 from evoagent.models.base import IModelBackend, ModelPrompt, ModelResponse
 from evoagent.tools.patch_tools import SEARCH_REPLACE_BLOCK_RE
 
+# Small models often write "SEARCH:" and "REPLACE:" headings over fenced code instead of the markers
+LABELED_BLOCKS_RE = re.compile(
+    r"SEARCH\W*\n\s*```[\w+-]*\n(.*?)```.*?REPLACE\W*\n\s*```[\w+-]*\n(.*?)```",
+    re.DOTALL | re.IGNORECASE,
+)
+
 
 class OpenAICompatibleModel(IModelBackend):
     """
@@ -24,14 +30,17 @@ class OpenAICompatibleModel(IModelBackend):
         base_url: str = "http://localhost:11434/v1",
         model_name: str = "qwen2.5-coder:1.5b",
         api_key: str = "not-needed",
-        timeout: float = 60.0,
+        timeout: float = 120.0,
         temperature: float = 0.2,
+        max_tokens: int = 1024,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         self.api_key = api_key
         self.timeout = timeout
         self.temperature = temperature
+        # Bounds a runaway or repetitive generation, which on CPU can otherwise run for minutes
+        self.max_tokens = max_tokens
 
     def _build_system_prompt(self, prompt: ModelPrompt) -> str:
         system_prompt = (
@@ -45,8 +54,16 @@ class OpenAICompatibleModel(IModelBackend):
             "=======\n"
             "[new replacement code]\n"
             ">>>>>>> REPLACE\n"
-            "Use one block per changed location. Each SEARCH section must copy whole lines exactly "
-            "and match only one place in the file.\n"
+            "For example, with indentation copied exactly from the file:\n"
+            "<<<<<<< SEARCH\n"
+            "    if count > limit:\n"
+            "        return False\n"
+            "=======\n"
+            "    if count >= limit:\n"
+            "        return False\n"
+            ">>>>>>> REPLACE\n"
+            "Write the three marker lines exactly as shown. Use one block per changed location. "
+            "Each SEARCH section must copy whole lines exactly and match only one place in the file.\n"
             "Only change lines necessary to fix the failure."
         )
         # Strategy prompt_style gene (Layer B)
@@ -94,6 +111,7 @@ class OpenAICompatibleModel(IModelBackend):
             "model": self.model_name,
             "messages": self.build_messages(prompt),
             "temperature": prompt.temperature if prompt.temperature is not None else self.temperature,
+            "max_tokens": self.max_tokens,
         }
 
         try:
@@ -131,9 +149,19 @@ class OpenAICompatibleModel(IModelBackend):
     def _extract_patch(self, text: str) -> str:
         """Extract SEARCH/REPLACE block or diff block from response."""
         # 1. Collect every SEARCH/REPLACE block (multi-location fixes need all of them)
-        sr_blocks = [m.group(0) for m in SEARCH_REPLACE_BLOCK_RE.finditer(text.replace("\r\n", "\n"))]
+        text = text.replace("\r\n", "\n")
+        sr_blocks = [m.group(0) for m in SEARCH_REPLACE_BLOCK_RE.finditer(text)]
         if sr_blocks:
             return "\n".join(sr_blocks)
+
+        # 1b. Labeled fenced blocks, rewritten into the canonical marker format
+        labeled = [
+            f"<<<<<<< SEARCH\n{search}=======\n{replace}>>>>>>> REPLACE"
+            for search, replace in LABELED_BLOCKS_RE.findall(text)
+            if search.strip()
+        ]
+        if labeled:
+            return "\n".join(labeled)
 
         # 2. Extract from markdown ```diff or ```codeblock
         diff_match = re.search(r"```diff\s*(.*?)\s*```", text, re.DOTALL)

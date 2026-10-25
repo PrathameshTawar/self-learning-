@@ -35,6 +35,10 @@ class Settings(BaseSettings):
         default="",
         description="API key if required by model endpoint",
     )
+    request_timeout_seconds: float = Field(
+        default=120.0,
+        description="Seconds to wait for one model response (CPU inference can be slow)",
+    )
 
     # Budget & Execution limits
     timeout_seconds: int = Field(

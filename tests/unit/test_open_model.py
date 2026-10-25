@@ -84,3 +84,45 @@ def test_model_default_temperature_used_without_strategy(monkeypatch):
 
     OpenAICompatibleModel(temperature=0.3).generate_repair_proposal(_prompt())
     assert captured["temperature"] == 0.3
+
+
+def test_labeled_fenced_blocks_become_applicable_search_replace(tmp_path):
+    from evoagent.domain.models import PatchProposal
+    from evoagent.tools.patch_tools import PatchTool
+
+    # Real Qwen2.5-3B output: headings over fenced code, indentation dropped
+    raw = (
+        "1. Hypothesis: the first row is initialized to 0.\n\n"
+        "2. SEARCH:\n```python\nfor j in range(n + 1):\n    dp[0][j] = 0\n```\n\n"
+        "3. REPLACE:\n```python\nfor j in range(n + 1):\n    dp[0][j] = j\n```"
+    )
+    patch = OpenAICompatibleModel()._extract_patch(raw)
+    assert patch.startswith("<<<<<<< SEARCH\n")
+
+    (tmp_path / "distance.py").write_text(
+        "def build(n):\n    dp = [[0] * (n + 1)]\n    for j in range(n + 1):\n        dp[0][j] = 0\n    return dp\n",
+        encoding="utf-8",
+    )
+    success, msg = PatchTool(root_path=tmp_path).apply_unified_diff(
+        PatchProposal(target_file="distance.py", diff_unified=patch)
+    )
+    assert success, msg
+    assert "        dp[0][j] = j\n" in (tmp_path / "distance.py").read_text(encoding="utf-8")
+
+
+def test_request_caps_output_tokens(monkeypatch):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "no patch"}}]})
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        open_model.httpx,
+        "Client",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+
+    OpenAICompatibleModel(max_tokens=256).generate_repair_proposal(_prompt())
+    assert captured["max_tokens"] == 256

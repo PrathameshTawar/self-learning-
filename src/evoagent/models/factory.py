@@ -9,8 +9,10 @@ from evoagent.models.open_model import OpenAICompatibleModel
 LLM_PROVIDERS = ("openai_compatible", "ollama")
 
 
-def create_model_backend(provider: str, model_name: str, api_base_url: str, api_key: str) -> IModelBackend:
+def create_model_backend(
+    provider: str, model_name: str, api_base_url: str, api_key: str, timeout: float = 120.0
+) -> IModelBackend:
     """Return an LLM backend for OpenAI-compatible providers, otherwise the offline heuristic mock."""
     if provider in LLM_PROVIDERS:
-        return OpenAICompatibleModel(base_url=api_base_url, model_name=model_name, api_key=api_key)
+        return OpenAICompatibleModel(base_url=api_base_url, model_name=model_name, api_key=api_key, timeout=timeout)
     return HeuristicCodingModel()

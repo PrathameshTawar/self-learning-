@@ -38,7 +38,8 @@ def _build_state_machine(memory_path: Path) -> TaskStateMachine:
     planner = TaskPlanner(retriever)
 
     model_backend = create_model_backend(
-        settings.model_provider, settings.model_name, settings.api_base_url, settings.api_key
+        settings.model_provider, settings.model_name, settings.api_base_url, settings.api_key,
+        timeout=settings.request_timeout_seconds,
     )
 
     git_inspector = GitInspector(sandbox)

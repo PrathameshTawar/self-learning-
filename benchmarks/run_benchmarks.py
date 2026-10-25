@@ -274,6 +274,9 @@ def run_held_out_comparison(
                         "total_tasks": len(held_out_files),
                         "resolution_rate_percent": pooled[cond_id]["resolution_rate_percent"],
                         "resolution_rate_per_trial": per_trial[cond_id],
+                        "solved_tasks_per_trial": [
+                            [res.task_id for res in trial if res.is_successful] for trial in runs[cond_id]
+                        ],
                         "regression_free_rate_percent": (
                             pooled[cond_id]["regression_free_rate_percent"]
                             if pooled[cond_id]["targeted_pass_candidates"]
@@ -341,6 +344,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("--model", default=settings.model_name, help="Model name for LLM providers")
     parser.add_argument("--base-url", default=settings.api_base_url, help="OpenAI-compatible endpoint")
+    parser.add_argument(
+        "--request-timeout", type=float, default=settings.request_timeout_seconds, help="Seconds per model response"
+    )
     parser.add_argument("--trials", type=int, default=1, help="Repeat the ablation N times (LLMs are nondeterministic)")
     parser.add_argument(
         "--no-file-hints",
@@ -357,7 +363,9 @@ if __name__ == "__main__":
     suite_dir = Path(__file__).parent
     data_dir = Path(__file__).parent.parent / "data"
     traces = Path(args.trace_dir) if args.trace_dir else None
-    model_backend = create_model_backend(args.provider, args.model, args.base_url, settings.api_key)
+    model_backend = create_model_backend(
+        args.provider, args.model, args.base_url, settings.api_key, timeout=args.request_timeout
+    )
 
     if args.eval_comparison:
         run_held_out_comparison(
