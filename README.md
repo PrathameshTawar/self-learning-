@@ -18,8 +18,10 @@
 6. [Quickstart Guide](#quickstart-guide)
 7. [Running Benchmarks & Held-Out Ablations](#running-benchmarks--held-out-ablations)
 8. [Results](#results)
-9. [Repository Structure](#repository-structure)
-10. [Roadmap & Milestones](#roadmap--milestones)
+9. [Fine-Tuning a Q-LoRA Adapter (Layer C)](#fine-tuning-a-q-lora-adapter-layer-c)
+10. [Production Deployment & Remote Workers](#production-deployment--remote-workers)
+11. [Repository Structure](#repository-structure)
+12. [Roadmap & Milestones](#roadmap--milestones)
 
 ---
 
@@ -57,7 +59,7 @@ graph TD
 |---|---|---|---|
 | **Layer A** | **Episodic Memory** | Stores failure signatures, root causes, SEARCH/REPLACE patches, and verified outcomes. Injects only verified lessons into future planning sessions via Okapi BM25 ranking. | **Implemented & Tested**; no measured benefit yet (see Results) |
 | **Layer B** | **Strategy Optimization** | Genetic evolution of hyperparameters (`prompt_style`, `retrieval_policy`, `retrieval_top_k`, `max_repair_attempts`, `max_patch_lines`, `temperature`, `enable_multi_file_context`), evaluated against frozen memory on the train split and promoted only if held-out fitness beats the active strategy by a fixed margin. | **Implemented & Tested** (no LLM results yet) |
-| **Layer C** | **Model Adaptation** | Builds SFT examples from evaluator-accepted attempts (with the exact prompt the model saw) and DPO pairs from accepted vs. rejected outputs for identical prompts, using run traces. Splits are assigned per task, so no task appears in both train and test, and benchmark held-out tasks are excluded by default. | Dataset export ready (`export-dataset`); LoRA training not validated yet |
+| **Layer C** | **Model Adaptation** | Builds SFT examples from evaluator-accepted attempts (with the exact prompt the model saw) and DPO pairs from accepted vs. rejected outputs for identical prompts, using run traces. Splits are assigned per task, so no task appears in both train and test, and benchmark held-out tasks are excluded by default. | Export and Q-LoRA training implemented (`export-dataset`, `train-adapter`); training loop verified on CPU only, no GPU results yet |
 
 ---
 
@@ -110,7 +112,7 @@ graph TD
 ## Hardware-Conscious Design
 
 Configured specifically for local developer machines (e.g. **NVIDIA GeForce GTX 1650 4 GB VRAM / 8–16 GB RAM**):
-- **Zero Heavy Daemons**: Standalone Python architecture using standard library `ast`, SQLite, and subprocess execution.
+- **Zero Heavy Daemons by default**: Standalone Python architecture using standard library `ast`, SQLite, and subprocess execution. PostgreSQL, Redis and the API are opt-in (Milestone 5).
 - **Small Model Optimized**: Tailored for 1.5B–7B coding models (e.g. `qwen2.5-coder:1.5b` via Ollama) using exact SEARCH/REPLACE blocks.
 - **Offline Test Mock**: Includes `HeuristicCodingModel` strictly as a fast, deterministic mock for unit tests and CI without needing an LLM.
 
@@ -251,12 +253,118 @@ The heuristic mock scores 0/5 on held-out tasks in every condition. That is expe
 
 ---
 
+## Fine-Tuning a Q-LoRA Adapter (Layer C)
+
+The adapter is trained on evaluator-accepted repairs only, with the exact prompts the model saw.
+
+```powershell
+# 1. Collect traces (train split only; held-out tasks are excluded from the export anyway)
+python benchmarks/run_benchmarks.py --split train --provider ollama --model qwen2.5-coder:1.5b
+
+# 2. Export SFT/DPO data plus manifest.json (rows and tasks per split, file hashes)
+evoagent export-dataset
+
+# 3. Train (install the CUDA build of torch first, then: pip install -e ".[training]")
+evoagent train-adapter
+
+# 4. Merge, convert to GGUF, and serve it like any other model
+evoagent merge-adapter
+python llama.cpp/convert_hf_to_gguf.py model_weights/evoagent_merged --outfile evoagent-ft.gguf --outtype q8_0
+llama-server -m evoagent-ft.gguf --port 8081
+
+# 5. Measure it: same held-out ablation, fine-tuned model vs. the base model
+python benchmarks/run_benchmarks.py --eval-comparison --provider openai_compatible --model evoagent-ft --trials 5
+```
+To serve the merged model with Ollama instead, print the base model's Modelfile (`ollama show qwen2.5-coder:1.5b --modelfile`), point its `FROM` line at the GGUF file, and run `ollama create evoagent-ft -f Modelfile`, so the chat template stays the same.
+
+**Choices made for a 4 GB GTX 1650 (Turing, compute capability 7.5):**
+
+| Choice | Why |
+|---|---|
+| Base model `Qwen2.5-Coder-1.5B-Instruct` | The repair loop is served the instruct model (Ollama's `qwen2.5-coder` tags), so training must use the same weights and chat template. The previous default was the base (non-instruct) model. |
+| Chat template, loss on the reply only | Prompts are rendered with `apply_chat_template` exactly as at inference. The old `### Instruction:` format matched nothing the model sees when served. |
+| NF4 4-bit + double quantization, fp16 compute | Turing has no bf16. If fp16 losses turn NaN, use `--precision fp32`. |
+| LoRA r=16, alpha=32 on all 7 linear projections | QLoRA results show that adapting every linear layer, not only q/v, is needed to match full fine-tuning. |
+| Logits only at reply positions | Qwen's 152k-token vocabulary makes full-sequence fp32 logits about 0.9 GB at 1536 tokens. Projecting only the ~100-300 reply positions removes most of that. A test checks that the loss equals the standard one. |
+| `max_seq_length` 1536, over-long examples skipped | Measured trace prompts are 562-1060 tokens, so the old 512 limit dropped every example. Truncation would cut the reply, so long examples are skipped and reported. |
+| Batch 1 × 8 gradient accumulation, gradient checkpointing, paged 8-bit AdamW, SDPA attention | Keeps activations and optimizer state small. FlashAttention 2 needs compute capability 8.0+. |
+| Splits by task, val loss each epoch | `val` tasks are never trained on. Held-out benchmark tasks are excluded at export. |
+
+The export scrubs credential-looking strings (API keys, tokens, private keys) and removes duplicate rows. Repeated trials with deterministic prompts would otherwise over-weight the same example. `training_summary.json` records the config, dataset hash, token-length distribution, losses, GPU and library versions.
+
+**Status:** the training loop, loss masking, adapter saving and merging are verified on CPU with a tiny random Qwen2 model (`tests/unit/test_finetune.py`, run in CI). It has not been run on a GTX 1650 yet, and no fine-tuned model has been evaluated. The last measured run yielded only 7 SFT rows, far too few for a measurable effect. Collect a few hundred accepted repairs first (the QuixBugs train split over several trials, or remote workers). DPO is not implemented: the same run produced 1 preference pair.
+
+---
+
+## Production Deployment & Remote Workers
+
+```
+ client ──HTTPS──> FastAPI (evoagent serve) ──XADD job id──> Redis stream ──XREADGROUP──> worker 1..N
+                        │                                                                   │
+                        └──────────── PostgreSQL: repair_jobs, memory_episodes (pgvector) ──┘
+                                                                         workers ──> model server (Ollama / llama.cpp)
+                                                                         workers ──> docker sandbox per test run
+```
+
+- **Postgres holds job state; Redis only delivers job ids.** The API writes the job row before enqueueing, so a worker never gets an unknown id. A job is acknowledged only after its result is stored.
+- **Crash recovery.** Redis Streams keep unacknowledged deliveries pending. While a job runs, its worker sends heartbeats. If the worker dies, `XAUTOCLAIM` hands the job to another worker once `EVOAGENT_QUEUE_VISIBILITY_TIMEOUT_SECONDS` passes without one. The heartbeat is a Lua script that checks ownership atomically, so a slow worker cannot take back a job that was already reclaimed. A job that has killed its worker `EVOAGENT_QUEUE_MAX_DELIVERIES` times is marked `error` and not retried again. Redeliveries of finished or cancelled jobs are acknowledged without running.
+- **Shared memory.** Every worker reads and writes the same `memory_episodes` table, so a repair verified on one worker becomes a lesson for all of them. Retrieval first takes a shortlist from a partial HNSW index over verified episodes, then BM25 ranks it exactly as with SQLite. Switching backends changes how candidates are found, not how lessons are ranked. The default embedder is dependency-free feature hashing; `EVOAGENT_EMBEDDING_PROVIDER=openai_compatible` uses an `/embeddings` endpoint such as Ollama's `nomic-embed-text`. Jobs with `"learn": false` (held-out evaluation) do not write to memory.
+- **Traces feed Layer C.** Each job stores its run trace. `evoagent export-traces` writes them to disk for `export-dataset`, so remote workers produce training data.
+
+### Run it
+```bash
+# Single machine, no Redis/Postgres: in-process queue and an embedded worker (local development)
+evoagent serve --embedded-worker --insecure-no-auth
+
+# Full stack: API, workers, Postgres + pgvector, Redis (see the header of docker-compose.yml)
+docker build -t evoagent-sandbox -f docker/sandbox.Dockerfile .
+export EVOAGENT_API_TOKENS=$(openssl rand -hex 24) POSTGRES_PASSWORD=$(openssl rand -hex 16)
+export DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+mkdir -p /tmp/evoagent-work && sudo chown 1000:1000 /tmp/evoagent-work
+docker compose up -d --build --scale worker=2
+```
+Workers on other machines need the same image, `EVOAGENT_DATABASE_URL`, `EVOAGENT_REDIS_URL` and a model endpoint, and run `evoagent worker`. With one GPU, one worker per model server is the right number: Ollama on a GTX 1650 serves one request at a time.
+
+### API
+All `/v1` routes need `Authorization: Bearer <token>`; `/healthz` and `/readyz` (checks Postgres and Redis) do not.
+
+| Method & path | Purpose |
+|---|---|
+| `POST /v1/jobs` | Submit a job: `files` (path → content, up to `EVOAGENT_MAX_UPLOAD_BYTES`) plus `targeted_test`, or `benchmark_task` (a task on the workers). Returns `201` with the job id. |
+| `GET /v1/jobs/{id}` | Status (`queued`, `running`, `succeeded`, `failed`, `error`, `cancelled`) and the result: final state, accepted patch, per-attempt outcome. |
+| `GET /v1/jobs/{id}/trace` | Full trace: every prompt, raw model output, and evaluation. |
+| `GET /v1/jobs?status=…` | Recent jobs. |
+| `POST /v1/jobs/{id}/cancel` | Cancel a queued job (`409` once running). |
+| `GET /v1/stats` | Job counts, queue depth, memory size. |
+| `GET /v1/memory/search?q=…` | Lessons the planner would retrieve for a failure text. |
+
+```bash
+curl -X POST localhost:8000/v1/jobs -H "Authorization: Bearer $EVOAGENT_API_TOKENS" -H "Content-Type: application/json" \
+  -d '{"task_id": "bug-001", "benchmark_task": "tasks/bug_001_parser"}'
+```
+
+### Security
+A job makes a worker run the submitted repository's tests, which means running arbitrary code. Therefore:
+- The API refuses to start without `EVOAGENT_API_TOKENS` (tokens are compared in constant time). Compose binds it to `127.0.0.1`; expose it only behind a TLS reverse proxy.
+- Workers refuse uploaded repositories unless `EVOAGENT_SANDBOX_BACKEND=docker`: a throwaway container per test run, with no network, a read-only root filesystem, and only the workspace mounted. `EVOAGENT_WORKER_ALLOW_LOCAL_SANDBOX=true` overrides this for trusted callers only.
+- Uploaded paths must be relative with no `..`. `benchmark_task` must resolve, after following symlinks, inside `EVOAGENT_WORKER_BENCHMARK_ROOTS`.
+- Mounting the Docker socket gives the worker container root-equivalent control of its host. Run workers on dedicated machines, or use a rootless Docker daemon or a gVisor (`runsc`) runtime for sandbox containers.
+
+**Status:** the API, Postgres job store, pgvector memory and Redis queue are tested against real PostgreSQL 16 + pgvector and Redis 7 (`tests/integration`, run in CI with service containers). A multi-process run was also checked by hand: API, two workers, one worker killed with SIGKILL mid-job and its job reclaimed by the other, and graceful SIGTERM shutdown. Still missing: a production load test, metrics export (Prometheus), and schema migrations beyond create-if-missing.
+
+---
+
 ## Running Tests & Linting
 
 ```powershell
 # Install test & lint tools, then run unit & end-to-end tests
-pip install -e ".[dev]"
+pip install -e ".[dev,server]"
 pytest -v -p no:deepeval
+
+# Integration tests need disposable PostgreSQL (with pgvector) and Redis instances
+$env:EVOAGENT_TEST_DATABASE_URL="postgresql://postgres:postgres@localhost:5432/evoagent_test"
+$env:EVOAGENT_TEST_REDIS_URL="redis://localhost:6379/0"
+pytest -v -p no:deepeval tests/integration
 
 # Run linter
 ruff check src tests benchmarks
@@ -302,7 +410,18 @@ ruff check src tests benchmarks
 │       │   ├── bm25.py           # Okapi BM25 ranking algorithm
 │       │   ├── schemas.py
 │       │   ├── store.py          # SQLite & in-memory stores
+│       │   ├── postgres_store.py # Shared PostgreSQL + pgvector store
+│       │   ├── embeddings.py     # Feature-hashing & OpenAI-compatible embedders
 │       │   └── retrieval.py      # Experience retriever with policies
+│       ├── storage/
+│       │   └── postgres.py       # Connection pool & advisory-locked schema setup
+│       ├── service/              # Production service (Milestone 5)
+│       │   ├── api.py            # FastAPI job API
+│       │   ├── jobs.py           # Job request/record models & path validation
+│       │   ├── job_store.py      # In-memory & PostgreSQL job stores
+│       │   ├── queue.py          # In-memory & Redis Streams queues with reclaim
+│       │   ├── worker.py         # Remote repair worker
+│       │   └── runtime.py        # Builds stores, queue & worker from settings
 │       ├── intelligence/         # AST symbol intelligence
 │       │   ├── ast_symbols.py    # Python AST symbol extractor
 │       │   ├── symbol_graph.py   # Cross-file symbol reference graph
@@ -312,16 +431,21 @@ ruff check src tests benchmarks
 │       │   └── static/
 │       │       └── index.html    # Single-page monitoring UI
 │       ├── orchestration/        # Orchestration engine
+│       │   ├── factory.py        # State machine wiring shared by CLI & workers
 │       │   ├── planner.py        # Task planner with retry feedback & genes
 │       │   ├── repair_agent.py   # Candidate proposal coordinator
 │       │   └── state_machine.py  # FSM lifecycle in throwaway tempdirs
 │       └── learning/             # Self-learning systems (Layers B & C)
 │           ├── dataset.py        # SFT / DPO training split curator
+│           ├── finetune.py       # Q-LoRA adapter training & merging (GTX 1650)
 │           ├── genetic.py        # Strategy chromosome & genetic operators
 │           ├── evolution.py      # Tournament & generational strategy evaluation
 │           └── registry.py       # Versioned strategy registry with promotion gate
+├── docker-compose.yml            # API, workers, Postgres + pgvector, Redis
 ├── docker/
+│   ├── app.Dockerfile            # Image for the API and workers
 │   └── sandbox.Dockerfile        # Image for the container sandbox
+├── training/                     # Script wrappers for export & adapter training
 ├── benchmarks/                   # Benchmark suite & evaluation splits
 │   ├── split.json                # Fixed train vs. held-out task partition
 │   ├── run_benchmarks.py         # Multi-condition evaluation runner
@@ -340,7 +464,8 @@ ruff check src tests benchmarks
 │       └── bug_010_moving_average/# [held-out] Off-by-one window range
 └── tests/                        # Comprehensive unit & E2E tests
     ├── unit/
-    └── e2e/
+    ├── e2e/
+    └── integration/              # Real PostgreSQL/pgvector & Redis (opt-in via env vars)
 ```
 
 ---
@@ -350,5 +475,5 @@ ruff check src tests benchmarks
 - [x] **Milestone 1: Controlled Repair Loop & Foundation** (Task runner, sandbox execution, patch application, independent evaluation, episodic memory).
 - [x] **Milestone 2: Multi-File Context & AST Symbol Navigation** (Python AST symbol extraction, dependency graph, cross-file reference assembly).
 - [x] **Milestone 3: Strategy Optimization Engine** (Genetic strategy evolution, prompt exploration, held-out promotion gate).
-- [ ] **Milestone 4: PEFT/Q-LoRA 4-bit Fine-Tuning** (Curated dataset export, adapter training on GeForce GTX 1650).
-- [ ] **Milestone 5: Production Deployment & Remote Workers** (FastAPI API, PostgreSQL/pgvector, Redis queues).
+- [x] **Milestone 4: PEFT/Q-LoRA 4-bit Fine-Tuning** (Curated dataset export, adapter training on GeForce GTX 1650). Training loop verified on CPU; GPU run and evaluation of a fine-tuned model still to do.
+- [x] **Milestone 5: Production Deployment & Remote Workers** (FastAPI API, PostgreSQL/pgvector, Redis queues).
