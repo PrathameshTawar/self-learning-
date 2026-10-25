@@ -2,8 +2,21 @@
 Benchmark and experiment metrics calculation engine.
 """
 
+import math
 from typing import Any, Dict, List
 from evoagent.domain.models import TaskResult
+
+
+def mcnemar_exact_p(only_first: int, only_second: int) -> float:
+    """
+    Two-sided exact McNemar test for paired pass/fail outcomes. Only discordant pairs count:
+    tasks solved by exactly one of the two configurations. Returns the p-value.
+    """
+    discordant = only_first + only_second
+    if discordant == 0:
+        return 1.0
+    tail = sum(math.comb(discordant, k) for k in range(min(only_first, only_second) + 1)) / 2**discordant
+    return min(1.0, 2 * tail)
 
 
 class BenchmarkMetricsCalculator:

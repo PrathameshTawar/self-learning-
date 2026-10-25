@@ -47,3 +47,14 @@ def test_regression_free_rate_gives_no_credit_when_nothing_was_fixed():
     assert metrics["resolution_rate_percent"] == 0.0
     assert metrics["targeted_pass_candidates"] == 0
     assert metrics["regression_free_rate_percent"] == 0.0
+
+
+def test_mcnemar_exact_p_values():
+    from evoagent.evaluation.metrics import mcnemar_exact_p
+
+    assert mcnemar_exact_p(0, 0) == 1.0
+    # 6 discordant pairs all favouring one side: 2 * (1/2)^6
+    assert mcnemar_exact_p(0, 6) == 2 / 64
+    # 1 vs 5: 2 * (C(6,0) + C(6,1)) / 2^6
+    assert mcnemar_exact_p(1, 5) == mcnemar_exact_p(5, 1) == 14 / 64
+    assert mcnemar_exact_p(3, 3) == 1.0
