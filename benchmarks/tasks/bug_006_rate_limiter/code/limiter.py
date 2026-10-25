@@ -18,7 +18,6 @@ def is_rate_limited(
     """
     cutoff = current_time - window_seconds
 
-    # Defect: filters timestamps older than cutoff instead of within active window
     valid_window_requests = [t for t in history if t < cutoff]
 
     return len(valid_window_requests) >= limit

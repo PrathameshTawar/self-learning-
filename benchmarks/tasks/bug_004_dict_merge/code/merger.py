@@ -8,7 +8,6 @@ def deep_merge_config(base, override):
 
     result = dict(base)
 
-    # Defect: does not guard against override being None before calling .items()
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = deep_merge_config(result[key], value)

@@ -95,3 +95,50 @@ def test_strategy_registry_statistical_gate_rejects_inferior(tmp_path: Path):
     v2 = registry.promote_strategy(strat_strong, benchmark_evidence={"fitness": 0.90}, min_fitness_margin=0.05)
     assert v2 == "v2"
     assert registry.get_active_strategy().strategy_id == "strat-strong"
+
+
+def test_tournament_generation_runs_against_frozen_memory(temp_repo: Path):
+    from evoagent.domain.models import ExecutionBudget, Task
+    from evoagent.evaluation.evaluator import IndependentEvaluator
+    from evoagent.learning.evolution import EvolutionaryTournament
+    from evoagent.memory.retrieval import ExperienceRetriever
+    from evoagent.memory.store import InMemoryMemoryStore
+    from evoagent.models.heuristic_model import HeuristicCodingModel
+    from evoagent.orchestration.planner import TaskPlanner
+    from evoagent.orchestration.repair_agent import RepairAgent
+    from evoagent.orchestration.state_machine import TaskStateMachine
+    from evoagent.sandbox.local_runner import LocalSubprocessSandbox
+    from evoagent.tools.git_tools import GitInspector
+    from evoagent.tools.patch_tools import PatchTool
+    from evoagent.tools.test_tools import TestRunnerTool
+
+    sandbox = LocalSubprocessSandbox()
+    test_runner = TestRunnerTool(sandbox)
+    store = InMemoryMemoryStore()
+    patch_tool = PatchTool(root_path=temp_repo)
+    sm = TaskStateMachine(
+        planner=TaskPlanner(ExperienceRetriever(store)),
+        repair_agent=RepairAgent(HeuristicCodingModel(), patch_tool),
+        evaluator=IndependentEvaluator(test_runner),
+        memory_store=store,
+        patch_tool=patch_tool,
+        git_inspector=GitInspector(sandbox),
+        test_runner=test_runner,
+    )
+    task = Task(
+        task_id="parser-empty-input",
+        repository_path=temp_repo,
+        issue_description="first_field crashes with IndexError on empty input",
+        targeted_test="tests/test_parser.py -k test_empty_input",
+        regression_test="tests/test_parser.py",
+        budget=ExecutionBudget(max_attempts=2, timeout_seconds=30),
+        metadata={"target_file": "parser.py"},
+    )
+
+    tournament = EvolutionaryTournament(sm, population_size=2)
+    champion = tournament.run_generation([task], generation_idx=1)
+
+    assert champion.fitness_score > 0.0
+    assert len(tournament.population) == 2
+    # Evaluating strategies must not write episodes that later chromosomes could retrieve
+    assert store.get_all_episodes() == []

@@ -141,7 +141,8 @@ class LocalSubprocessSandbox(ISandboxRunner):
                 timed_out=True,
             )
 
-        except (FileNotFoundError, PermissionError):
+        except (FileNotFoundError, PermissionError) as launch_exc:
+            error: Exception = launch_exc
             # Fallback for Windows executables requiring shell resolution
             if os.name == "nt":
                 try:
@@ -163,13 +164,13 @@ class LocalSubprocessSandbox(ISandboxRunner):
                         timed_out=False,
                     )
                 except Exception as inner_exc:
-                    exc = inner_exc
+                    error = inner_exc
 
             duration = time.perf_counter() - start_time
             return ExecutionOutcome(
                 exit_code=1,
                 stdout="",
-                stderr=f"Sandbox execution failed: {str(exc)}",
+                stderr=f"Sandbox execution failed: {str(error)}",
                 duration_seconds=duration,
                 timed_out=False,
             )

@@ -35,7 +35,7 @@
           <span class="card-title">Task Resolution</span>
           <span class="card-badge">SWE Pilot</span>
         </div>
-        <div class="metric-value" id="metric-resolution" style="color: #38bdf8;">100.0%</div>
+        <div class="metric-value" id="metric-resolution" style="color: #38bdf8;">&ndash;</div>
         <div class="metric-target">Engineering Target: <span class="target-badge">&ge; 50%</span></div>
       </div>
 
@@ -44,7 +44,7 @@
           <span class="card-title">Regression-Free Rate</span>
           <span class="card-badge">Authority Validated</span>
         </div>
-        <div class="metric-value" id="metric-regression" style="color: #34d399;">100.0%</div>
+        <div class="metric-value" id="metric-regression" style="color: #34d399;">&ndash;</div>
         <div class="metric-target">Engineering Target: <span class="target-badge">&ge; 95%</span></div>
       </div>
 
@@ -53,7 +53,7 @@
           <span class="card-title">Patch Validity</span>
           <span class="card-badge">Syntactic</span>
         </div>
-        <div class="metric-value" id="metric-validity" style="color: #818cf8;">100.0%</div>
+        <div class="metric-value" id="metric-validity" style="color: #818cf8;">&ndash;</div>
         <div class="metric-target">Engineering Target: <span class="target-badge">&ge; 95%</span></div>
       </div>
 
@@ -62,7 +62,7 @@
           <span class="card-title">Avg Repair Duration</span>
           <span class="card-badge">Wall Time</span>
         </div>
-        <div class="metric-value" id="metric-duration" style="color: #fbbf24;">2.27s</div>
+        <div class="metric-value" id="metric-duration" style="color: #fbbf24;">&ndash;</div>
         <div class="metric-target">Target Ceiling: <span class="target-badge">&lt; 30s</span></div>
       </div>
     </section>
@@ -143,14 +143,10 @@
         <div class="panel">
           <div class="panel-header">
             <div class="panel-title">Validated Unified Diff Patch</div>
-            <span class="card-badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399;">Evaluator Accepted</span>
+            <span class="card-badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399;">Latest Patch</span>
           </div>
           <div id="active-diff-viewer" class="diff-container">
-            <div class="diff-line diff-header">--- a/parser.py</div>
-            <div class="diff-line diff-header">+++ b/parser.py</div>
-            <div class="diff-line diff-header">@@ -1,3 +1,3 @@</div>
-            <div class="diff-line diff-remove">-    return parts[0].strip()</div>
-            <div class="diff-line diff-add">+    return parts[0].strip() if parts else ""</div>
+            <div class="diff-line">No patch yet. Trigger a repair or inspect an episode from memory.</div>
           </div>
         </div>
       </div>
@@ -191,49 +187,27 @@
     <section id="tab-strategy" class="tab-content">
       <div class="panel">
         <div class="panel-header">
-          <div class="panel-title">Strategy Benchmark Rankings (Layer B)</div>
-          <span class="card-badge">Controlled Experiment Suite</span>
+          <div class="panel-title">Held-Out Ablation Results</div>
+          <span class="card-badge" id="experiments-meta">No results yet</span>
         </div>
         <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.5rem;">
-          Compares alternative planning prompts, retrieval heuristics, and repair policies across identical held-out benchmark tasks.
+          Measured on the held-out split by <code>python benchmarks/run_benchmarks.py --eval-comparison</code>.
+          Condition C may only use memory learned on the train split.
         </p>
 
         <table class="data-table">
           <thead>
             <tr>
-              <th>Variant ID</th>
+              <th>Condition</th>
               <th>Configuration</th>
               <th>Resolution Rate</th>
               <th>Regression-Free</th>
+              <th>Avg Attempts</th>
               <th>Avg Duration</th>
-              <th>Status</th>
             </tr>
           </thead>
-          <tbody>
-            <tr>
-              <td style="font-family: var(--font-mono); font-weight: 600; color: #818cf8;">Variant B</td>
-              <td><strong>Memory-Guided</strong> (Retrieval top-k=3, Heuristic model)</td>
-              <td><span style="color: #34d399; font-weight: 700;">100.0%</span></td>
-              <td><span style="color: #34d399; font-weight: 700;">100.0%</span></td>
-              <td>2.27s</td>
-              <td><span class="badge-success">Champion Policy</span></td>
-            </tr>
-            <tr>
-              <td style="font-family: var(--font-mono); font-weight: 600; color: var(--text-muted);">Variant A</td>
-              <td><strong>Baseline</strong> (Frozen model, no experience retrieval)</td>
-              <td><span style="color: #fbbf24; font-weight: 700;">50.0%</span></td>
-              <td><span style="color: #34d399; font-weight: 700;">95.0%</span></td>
-              <td>4.10s</td>
-              <td><span class="badge-danger">Baseline</span></td>
-            </tr>
-            <tr>
-              <td style="font-family: var(--font-mono); font-weight: 600; color: #38bdf8;">Variant C</td>
-              <td><strong>Deep Memory</strong> (Retrieval top-k=5, budget max=4)</td>
-              <td><span style="color: #34d399; font-weight: 700;">100.0%</span></td>
-              <td><span style="color: #34d399; font-weight: 700;">100.0%</span></td>
-              <td>2.95s</td>
-              <td><span class="badge-success">Candidate</span></td>
-            </tr>
+          <tbody id="experiments-table-body">
+            <tr><td colspan="6" style="text-align:center; color: var(--text-dim);">No ablation results recorded yet. Run the command above to measure them.</td></tr>
           </tbody>
         </table>
       </div>
