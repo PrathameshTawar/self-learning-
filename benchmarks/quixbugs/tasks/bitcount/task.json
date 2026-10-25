@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-bitcount",
+  "repo_dir": "code",
+  "issue_description": "bitcount gives wrong results on some inputs; tests/test_bitcount.py fails",
+  "targeted_test": "tests/test_bitcount.py",
+  "regression_test": "tests/test_bitcount.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "bitcount.py",
+    "defect_class": "arithmetic-operator",
+    "source": "QuixBugs"
+  }
+}

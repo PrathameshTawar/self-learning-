@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-minimum_spanning_tree",
+  "repo_dir": "code",
+  "issue_description": "minimum_spanning_tree gives wrong results on some inputs; tests/test_minimum_spanning_tree.py fails",
+  "targeted_test": "tests/test_minimum_spanning_tree.py",
+  "regression_test": "tests/test_minimum_spanning_tree.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "minimum_spanning_tree.py",
+    "defect_class": "multiple-edits",
+    "source": "QuixBugs"
+  }
+}

@@ -335,6 +335,11 @@ def run_benchmark_suite(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="EvoAgent Benchmark Runner")
     parser.add_argument("--split", choices=["all", "train", "held_out"], default="all")
+    parser.add_argument(
+        "--benchmark-root",
+        default=str(Path(__file__).parent),
+        help="Directory with split.json and tasks/ (e.g. benchmarks/quixbugs after running import_quixbugs.py)",
+    )
     parser.add_argument("--eval-comparison", action="store_true", help="Run 3-way ablation comparison on held-out tasks")
     parser.add_argument(
         "--provider",
@@ -360,7 +365,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    suite_dir = Path(__file__).parent
+    suite_dir = Path(args.benchmark_root)
     data_dir = Path(__file__).parent.parent / "data"
     traces = Path(args.trace_dir) if args.trace_dir else None
     model_backend = create_model_backend(

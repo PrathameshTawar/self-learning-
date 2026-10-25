@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-longest_common_subsequence",
+  "repo_dir": "code",
+  "issue_description": "longest_common_subsequence gives wrong results on some inputs; tests/test_longest_common_subsequence.py fails",
+  "targeted_test": "tests/test_longest_common_subsequence.py",
+  "regression_test": "tests/test_longest_common_subsequence.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "longest_common_subsequence.py",
+    "defect_class": "missing-expression",
+    "source": "QuixBugs"
+  }
+}

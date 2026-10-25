@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-max_sublist_sum",
+  "repo_dir": "code",
+  "issue_description": "max_sublist_sum gives wrong results on some inputs; tests/test_max_sublist_sum.py fails",
+  "targeted_test": "tests/test_max_sublist_sum.py",
+  "regression_test": "tests/test_max_sublist_sum.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "max_sublist_sum.py",
+    "defect_class": "missing-call",
+    "source": "QuixBugs"
+  }
+}

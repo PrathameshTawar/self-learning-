@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-wrap",
+  "repo_dir": "code",
+  "issue_description": "wrap gives wrong results on some inputs; tests/test_wrap.py fails",
+  "targeted_test": "tests/test_wrap.py",
+  "regression_test": "tests/test_wrap.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "wrap.py",
+    "defect_class": "missing-line",
+    "source": "QuixBugs"
+  }
+}

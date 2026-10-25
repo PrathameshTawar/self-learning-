@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-next_palindrome",
+  "repo_dir": "code",
+  "issue_description": "next_palindrome gives wrong results on some inputs; tests/test_next_palindrome.py fails",
+  "targeted_test": "tests/test_next_palindrome.py",
+  "regression_test": "tests/test_next_palindrome.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "next_palindrome.py",
+    "defect_class": "off-by-one",
+    "source": "QuixBugs"
+  }
+}

@@ -67,6 +67,8 @@ addopts = "-v --tb=short"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Vendored QuixBugs programs are benchmark inputs and must stay exactly as published
+extend-exclude = ["benchmarks/quixbugs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

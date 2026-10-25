@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-rpn_eval",
+  "repo_dir": "code",
+  "issue_description": "rpn_eval gives wrong results on some inputs; tests/test_rpn_eval.py fails",
+  "targeted_test": "tests/test_rpn_eval.py",
+  "regression_test": "tests/test_rpn_eval.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "rpn_eval.py",
+    "defect_class": "swapped-operands",
+    "source": "QuixBugs"
+  }
+}

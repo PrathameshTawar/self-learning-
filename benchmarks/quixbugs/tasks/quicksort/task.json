@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-quicksort",
+  "repo_dir": "code",
+  "issue_description": "quicksort gives wrong results on some inputs; tests/test_quicksort.py fails",
+  "targeted_test": "tests/test_quicksort.py",
+  "regression_test": "tests/test_quicksort.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "quicksort.py",
+    "defect_class": "comparison-operator",
+    "source": "QuixBugs"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-next_permutation",
+  "repo_dir": "code",
+  "issue_description": "next_permutation gives wrong results on some inputs; tests/test_next_permutation.py fails",
+  "targeted_test": "tests/test_next_permutation.py",
+  "regression_test": "tests/test_next_permutation.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "next_permutation.py",
+    "defect_class": "swapped-operands",
+    "source": "QuixBugs"
+  }
+}

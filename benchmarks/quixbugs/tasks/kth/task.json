@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-kth",
+  "repo_dir": "code",
+  "issue_description": "kth gives wrong results on some inputs; tests/test_kth.py fails",
+  "targeted_test": "tests/test_kth.py",
+  "regression_test": "tests/test_kth.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "kth.py",
+    "defect_class": "missing-expression",
+    "source": "QuixBugs"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-shunting_yard",
+  "repo_dir": "code",
+  "issue_description": "shunting_yard gives wrong results on some inputs; tests/test_shunting_yard.py fails",
+  "targeted_test": "tests/test_shunting_yard.py",
+  "regression_test": "tests/test_shunting_yard.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "shunting_yard.py",
+    "defect_class": "missing-line",
+    "source": "QuixBugs"
+  }
+}

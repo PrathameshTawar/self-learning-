@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-shortest_paths",
+  "repo_dir": "code",
+  "issue_description": "shortest_paths gives wrong results on some inputs; tests/test_shortest_paths.py fails",
+  "targeted_test": "tests/test_shortest_paths.py",
+  "regression_test": "tests/test_shortest_paths.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "shortest_paths.py",
+    "defect_class": "multiple-edits",
+    "source": "QuixBugs"
+  }
+}

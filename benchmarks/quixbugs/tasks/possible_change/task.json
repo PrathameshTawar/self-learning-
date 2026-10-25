@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-possible_change",
+  "repo_dir": "code",
+  "issue_description": "possible_change gives wrong results on some inputs; tests/test_possible_change.py fails",
+  "targeted_test": "tests/test_possible_change.py",
+  "regression_test": "tests/test_possible_change.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "possible_change.py",
+    "defect_class": "missing-expression",
+    "source": "QuixBugs"
+  }
+}

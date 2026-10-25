@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-is_valid_parenthesization",
+  "repo_dir": "code",
+  "issue_description": "is_valid_parenthesization gives wrong results on some inputs; tests/test_is_valid_parenthesization.py fails",
+  "targeted_test": "tests/test_is_valid_parenthesization.py",
+  "regression_test": "tests/test_is_valid_parenthesization.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "is_valid_parenthesization.py",
+    "defect_class": "multiple-edits",
+    "source": "QuixBugs"
+  }
+}
