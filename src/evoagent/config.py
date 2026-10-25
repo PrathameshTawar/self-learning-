@@ -40,6 +40,16 @@ class Settings(BaseSettings):
         description="Seconds to wait for one model response (CPU inference can be slow)",
     )
 
+    # Sandbox
+    sandbox_backend: Literal["local", "docker"] = Field(
+        default="local",
+        description="local: host subprocess; docker: throwaway container with no network",
+    )
+    sandbox_image: str = Field(
+        default="evoagent-sandbox:latest",
+        description="Image for the docker sandbox (see docker/sandbox.Dockerfile)",
+    )
+
     # Budget & Execution limits
     timeout_seconds: int = Field(
         default=60,

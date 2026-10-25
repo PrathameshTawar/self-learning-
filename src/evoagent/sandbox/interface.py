@@ -27,6 +27,9 @@ class ExecutionOutcome:
 class ISandboxRunner(ABC):
     """Protocol for isolating execution of candidate code and test suites."""
 
+    # Python interpreter to invoke inside the sandbox; None means the host's sys.executable
+    python_executable: Optional[str] = None
+
     @abstractmethod
     def execute_command(
         self,

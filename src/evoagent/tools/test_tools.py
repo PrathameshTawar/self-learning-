@@ -16,7 +16,7 @@ class TestRunnerTool:
 
     def __init__(self, sandbox: ISandboxRunner, python_executable: Optional[str] = None) -> None:
         self.sandbox = sandbox
-        self.python_executable = python_executable or sys.executable
+        self.python_executable = python_executable or sandbox.python_executable or sys.executable
 
     def run_pytest(
         self,

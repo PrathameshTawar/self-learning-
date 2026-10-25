@@ -32,6 +32,7 @@ from evoagent.models.heuristic_model import HeuristicCodingModel
 from evoagent.orchestration.planner import TaskPlanner
 from evoagent.orchestration.repair_agent import RepairAgent
 from evoagent.orchestration.state_machine import TaskStateMachine
+from evoagent.sandbox import ISandboxRunner, create_sandbox
 from evoagent.sandbox.local_runner import LocalSubprocessSandbox
 from evoagent.tools.git_tools import GitInspector
 from evoagent.tools.patch_tools import PatchTool
@@ -97,9 +98,10 @@ def run_tasks(
     show_progress: bool = False,
     trace_dir: Optional[Path] = None,
     file_hints: bool = True,
+    sandbox: Optional[ISandboxRunner] = None,
 ) -> List[TaskResult]:
     """Run tasks in throwaway workspaces; persist_episodes=False evaluates against frozen memory."""
-    sandbox = LocalSubprocessSandbox()
+    sandbox = sandbox or LocalSubprocessSandbox()
     test_runner = TestRunnerTool(sandbox)
     evaluator = IndependentEvaluator(test_runner)
     planner = TaskPlanner(ExperienceRetriever(memory_store))
@@ -152,6 +154,7 @@ def run_held_out_comparison(
     trace_dir: Optional[Path] = None,
     trials: int = 1,
     file_hints: bool = True,
+    sandbox: Optional[ISandboxRunner] = None,
 ) -> None:
     """Run the three-way ablation on held-out tasks `trials` times and report pooled metrics."""
     train_files = load_task_split(benchmark_root, "train")
@@ -182,24 +185,27 @@ def run_held_out_comparison(
         console.print("[cyan]  A: zero-shot (no memory, 1 attempt)...[/]")
         runs["A"].append(run_tasks(
             held_out_files, model, InMemoryMemoryStore(), max_attempts=1, persist_episodes=False,
-            trace_dir=trace_dir, file_hints=file_hints,
+            trace_dir=trace_dir, file_hints=file_hints, sandbox=sandbox,
         ))
 
         console.print("[cyan]  B: retry feedback (no memory, 3 attempts)...[/]")
         runs["B"].append(run_tasks(
             held_out_files, model, InMemoryMemoryStore(), max_attempts=3, persist_episodes=False,
-            trace_dir=trace_dir, file_hints=file_hints,
+            trace_dir=trace_dir, file_hints=file_hints, sandbox=sandbox,
         ))
 
         # C: memory built from the train split only, then frozen while evaluating held-out tasks.
         # Reusing an old memory DB would leak held-out solutions from earlier runs into the "learning" score.
         console.print("[cyan]  C: learning on train split, then held-out with frozen memory...[/]")
         learned_memory = InMemoryMemoryStore()
-        run_tasks(train_files, model, learned_memory, persist_episodes=True, trace_dir=trace_dir, file_hints=file_hints)
+        run_tasks(
+            train_files, model, learned_memory, persist_episodes=True, trace_dir=trace_dir, file_hints=file_hints,
+            sandbox=sandbox,
+        )
         learned_episodes.append(len(learned_memory.get_accepted_episodes()))
         runs["C"].append(run_tasks(
             held_out_files, model, learned_memory, max_attempts=3, persist_episodes=False,
-            trace_dir=trace_dir, file_hints=file_hints,
+            trace_dir=trace_dir, file_hints=file_hints, sandbox=sandbox,
         ))
 
     # Pooled metrics over every trial, plus the spread of the per-trial resolution rates
@@ -302,6 +308,7 @@ def run_benchmark_suite(
     split: str = "all",
     trace_dir: Optional[Path] = None,
     file_hints: bool = True,
+    sandbox: Optional[ISandboxRunner] = None,
 ) -> None:
     """Discover and execute benchmark tasks for given split."""
     task_files = load_task_split(benchmark_root, split)
@@ -314,7 +321,7 @@ def run_benchmark_suite(
 
     results = run_tasks(
         task_files, model, SQLiteMemoryStore(memory_db_path), show_progress=True, trace_dir=trace_dir,
-        file_hints=file_hints,
+        file_hints=file_hints, sandbox=sandbox,
     )
     metrics = BenchmarkMetricsCalculator.calculate_metrics(results)
 
@@ -354,6 +361,13 @@ if __name__ == "__main__":
     )
     parser.add_argument("--trials", type=int, default=1, help="Repeat the ablation N times (LLMs are nondeterministic)")
     parser.add_argument(
+        "--sandbox",
+        choices=["local", "docker"],
+        default=settings.sandbox_backend,
+        help="Where candidate code runs (docker: no network, see docker/sandbox.Dockerfile)",
+    )
+    parser.add_argument("--sandbox-image", default=settings.sandbox_image, help="Image for --sandbox docker")
+    parser.add_argument(
         "--no-file-hints",
         action="store_true",
         help="Drop metadata.target_file so the agent must find the defective file itself",
@@ -368,6 +382,7 @@ if __name__ == "__main__":
     suite_dir = Path(args.benchmark_root)
     data_dir = Path(__file__).parent.parent / "data"
     traces = Path(args.trace_dir) if args.trace_dir else None
+    sandbox_runner = create_sandbox(args.sandbox, args.sandbox_image)
     model_backend = create_model_backend(
         args.provider, args.model, args.base_url, settings.api_key, timeout=args.request_timeout
     )
@@ -375,10 +390,10 @@ if __name__ == "__main__":
     if args.eval_comparison:
         run_held_out_comparison(
             suite_dir, model_backend, data_dir / "ablation_results.json", trace_dir=traces, trials=args.trials,
-            file_hints=not args.no_file_hints,
+            file_hints=not args.no_file_hints, sandbox=sandbox_runner,
         )
     else:
         run_benchmark_suite(
             suite_dir, data_dir / "benchmark_memory.db", model_backend, split=args.split, trace_dir=traces,
-            file_hints=not args.no_file_hints,
+            file_hints=not args.no_file_hints, sandbox=sandbox_runner,
         )
