@@ -139,3 +139,16 @@ def test_lesson_shows_changed_lines_of_search_replace_patch():
     assert len(lessons) == 1
     assert "(Fix applied: return a / b if b else 0.0)" in lessons[0]
     assert "REPLACE" not in lessons[0]
+
+
+def test_failed_episodes_never_become_lessons():
+    store = InMemoryMemoryStore()
+    store.save_episode(_episode("ep-failed", "IndexError: list index out of range", "", outcome="rejected"))
+    retriever = ExperienceRetriever(store)
+
+    assert retriever.retrieve_relevant_lessons("IndexError: list index out of range") == []
+
+    store.save_episode(_episode("ep-fixed", "IndexError: list index out of range", "+    return xs[0] if xs else None"))
+    lessons = retriever.retrieve_relevant_lessons("IndexError: list index out of range")
+    assert len(lessons) == 1
+    assert "task-ep-fixed (Resolved)" in lessons[0]
