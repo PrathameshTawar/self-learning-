@@ -1,0 +1,13 @@
+{
+  "task_id": "bug-010-moving-average",
+  "repo_dir": "code",
+  "issue_description": "moving_average leaves out the final window of values",
+  "targeted_test": "tests/test_averages.py -k test_includes_last_window",
+  "regression_test": "tests/test_averages.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "averages.py",
+    "defect_class": "off-by-one-bound"
+  }
+}

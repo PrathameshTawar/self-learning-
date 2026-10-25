@@ -2,12 +2,16 @@
   "train_tasks": [
     "bug-001-parser",
     "bug-002-multifile",
-    "bug-003-binary-search"
+    "bug-003-binary-search",
+    "bug-007-max-subarray",
+    "bug-008-cache-ttl"
   ],
   "held_out_tasks": [
     "bug-004-dict-merge",
     "bug-005-levenshtein",
-    "bug-006-rate-limiter"
+    "bug-006-rate-limiter",
+    "bug-009-latest-event",
+    "bug-010-moving-average"
   ],
-  "description": "Fixed train vs. held-out benchmark split for evaluating self-learning and memory transfer."
+  "description": "Fixed train vs. held-out split. Every held-out task has a train task with the same metadata.defect_class but different code, so episodic memory has something to transfer."
 }

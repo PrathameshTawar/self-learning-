@@ -1,0 +1,13 @@
+{
+  "task_id": "bug-009-latest-event",
+  "repo_dir": "code",
+  "issue_description": "most_recent_event raises IndexError when the event list is empty",
+  "targeted_test": "tests/test_events.py -k test_no_events_returns_none",
+  "regression_test": "tests/test_events.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "events.py",
+    "defect_class": "empty-collection-guard"
+  }
+}
