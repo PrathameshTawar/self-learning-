@@ -20,7 +20,7 @@ from evoagent.models.factory import create_model_backend
 from evoagent.orchestration.planner import TaskPlanner
 from evoagent.orchestration.repair_agent import RepairAgent
 from evoagent.orchestration.state_machine import TaskStateMachine
-from evoagent.sandbox.local_runner import LocalSubprocessSandbox
+from evoagent.sandbox import create_sandbox
 from evoagent.tools.git_tools import GitInspector
 from evoagent.tools.patch_tools import PatchTool
 from evoagent.tools.test_tools import TestRunnerTool
@@ -30,7 +30,7 @@ console = Console()
 
 def _build_state_machine(memory_path: Path) -> TaskStateMachine:
     """Wire dependencies for the state machine."""
-    sandbox = LocalSubprocessSandbox()
+    sandbox = create_sandbox(settings.sandbox_backend, settings.sandbox_image)
     test_runner = TestRunnerTool(sandbox)
     evaluator = IndependentEvaluator(test_runner)
     memory_store = SQLiteMemoryStore(memory_path)
@@ -38,7 +38,8 @@ def _build_state_machine(memory_path: Path) -> TaskStateMachine:
     planner = TaskPlanner(retriever)
 
     model_backend = create_model_backend(
-        settings.model_provider, settings.model_name, settings.api_base_url, settings.api_key
+        settings.model_provider, settings.model_name, settings.api_base_url, settings.api_key,
+        timeout=settings.request_timeout_seconds,
     )
 
     git_inspector = GitInspector(sandbox)

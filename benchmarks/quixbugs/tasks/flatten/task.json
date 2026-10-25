@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-flatten",
+  "repo_dir": "code",
+  "issue_description": "flatten gives wrong results on some inputs; tests/test_flatten.py fails",
+  "targeted_test": "tests/test_flatten.py",
+  "regression_test": "tests/test_flatten.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "flatten.py",
+    "defect_class": "extra-call",
+    "source": "QuixBugs"
+  }
+}

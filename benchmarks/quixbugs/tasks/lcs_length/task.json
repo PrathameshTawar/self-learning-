@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-lcs_length",
+  "repo_dir": "code",
+  "issue_description": "lcs_length gives wrong results on some inputs; tests/test_lcs_length.py fails",
+  "targeted_test": "tests/test_lcs_length.py",
+  "regression_test": "tests/test_lcs_length.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "lcs_length.py",
+    "defect_class": "off-by-one",
+    "source": "QuixBugs"
+  }
+}

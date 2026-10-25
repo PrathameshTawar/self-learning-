@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-detect_cycle",
+  "repo_dir": "code",
+  "issue_description": "detect_cycle gives wrong results on some inputs; tests/test_detect_cycle.py fails",
+  "targeted_test": "tests/test_detect_cycle.py",
+  "regression_test": "tests/test_detect_cycle.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "detect_cycle.py",
+    "defect_class": "missing-expression",
+    "source": "QuixBugs"
+  }
+}

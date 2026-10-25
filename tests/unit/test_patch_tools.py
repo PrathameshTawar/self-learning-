@@ -212,3 +212,37 @@ def test_unified_diff_uses_hunk_line_number_to_break_ties(tmp_path: Path):
     success, msg, updated = _apply(tmp_path, original, diff)
     assert success, msg
     assert updated == "total = 0\nstep()\ntotal = 1\nstep()\n"
+
+
+def test_search_without_enclosing_indentation_is_reindented(tmp_path: Path):
+    # Small models often copy code without the indentation of its enclosing function
+    original = "def init(m):\n    dp = []\n    for i in range(m + 1):\n        dp.append(i)\n    return dp\n"
+    success, msg, updated = _apply(
+        tmp_path,
+        original,
+        "<<<<<<< SEARCH\nfor i in range(m + 1):\n    dp.append(i)\n=======\nfor i in range(m + 2):\n    dp.append(i)\n>>>>>>> REPLACE",
+    )
+    assert success, msg
+    assert updated == "def init(m):\n    dp = []\n    for i in range(m + 2):\n        dp.append(i)\n    return dp\n"
+
+
+def test_over_indented_search_is_shifted_back(tmp_path: Path):
+    success, msg, updated = _apply(
+        tmp_path,
+        "x = 1\ny = 2\n",
+        "<<<<<<< SEARCH\n    x = 1\n=======\n    x = 10\n>>>>>>> REPLACE",
+    )
+    assert success, msg
+    assert updated == "x = 10\ny = 2\n"
+
+
+def test_inconsistent_indentation_is_not_guessed(tmp_path: Path):
+    original = "def f():\n    a = 1\n    b = 2\n"
+    success, msg, updated = _apply(
+        tmp_path,
+        original,
+        "<<<<<<< SEARCH\na = 1\n        b = 2\n=======\na = 3\n        b = 4\n>>>>>>> REPLACE",
+    )
+    assert not success
+    assert "was not found" in msg
+    assert updated == original

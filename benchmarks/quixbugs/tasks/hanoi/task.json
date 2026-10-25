@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-hanoi",
+  "repo_dir": "code",
+  "issue_description": "hanoi gives wrong results on some inputs; tests/test_hanoi.py fails",
+  "targeted_test": "tests/test_hanoi.py",
+  "regression_test": "tests/test_hanoi.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "hanoi.py",
+    "defect_class": "wrong-variable",
+    "source": "QuixBugs"
+  }
+}

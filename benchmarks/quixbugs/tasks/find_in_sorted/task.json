@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-find_in_sorted",
+  "repo_dir": "code",
+  "issue_description": "find_in_sorted gives wrong results on some inputs; tests/test_find_in_sorted.py fails",
+  "targeted_test": "tests/test_find_in_sorted.py",
+  "regression_test": "tests/test_find_in_sorted.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "find_in_sorted.py",
+    "defect_class": "off-by-one",
+    "source": "QuixBugs"
+  }
+}

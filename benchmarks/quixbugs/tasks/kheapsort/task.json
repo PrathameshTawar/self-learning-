@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-kheapsort",
+  "repo_dir": "code",
+  "issue_description": "kheapsort gives wrong results on some inputs; tests/test_kheapsort.py fails",
+  "targeted_test": "tests/test_kheapsort.py",
+  "regression_test": "tests/test_kheapsort.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "kheapsort.py",
+    "defect_class": "missing-expression",
+    "source": "QuixBugs"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-breadth_first_search",
+  "repo_dir": "code",
+  "issue_description": "breadth_first_search gives wrong results on some inputs; tests/test_breadth_first_search.py fails",
+  "targeted_test": "tests/test_breadth_first_search.py",
+  "regression_test": "tests/test_breadth_first_search.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "breadth_first_search.py",
+    "defect_class": "wrong-variable",
+    "source": "QuixBugs"
+  }
+}

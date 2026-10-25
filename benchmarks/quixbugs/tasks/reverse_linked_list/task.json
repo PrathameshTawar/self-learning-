@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-reverse_linked_list",
+  "repo_dir": "code",
+  "issue_description": "reverse_linked_list gives wrong results on some inputs; tests/test_reverse_linked_list.py fails",
+  "targeted_test": "tests/test_reverse_linked_list.py",
+  "regression_test": "tests/test_reverse_linked_list.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "reverse_linked_list.py",
+    "defect_class": "missing-line",
+    "source": "QuixBugs"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-shortest_path_lengths",
+  "repo_dir": "code",
+  "issue_description": "shortest_path_lengths gives wrong results on some inputs; tests/test_shortest_path_lengths.py fails",
+  "targeted_test": "tests/test_shortest_path_lengths.py",
+  "regression_test": "tests/test_shortest_path_lengths.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "shortest_path_lengths.py",
+    "defect_class": "swapped-operands",
+    "source": "QuixBugs"
+  }
+}

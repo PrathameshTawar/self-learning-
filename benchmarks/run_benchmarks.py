@@ -32,6 +32,7 @@ from evoagent.models.heuristic_model import HeuristicCodingModel
 from evoagent.orchestration.planner import TaskPlanner
 from evoagent.orchestration.repair_agent import RepairAgent
 from evoagent.orchestration.state_machine import TaskStateMachine
+from evoagent.sandbox import ISandboxRunner, create_sandbox
 from evoagent.sandbox.local_runner import LocalSubprocessSandbox
 from evoagent.tools.git_tools import GitInspector
 from evoagent.tools.patch_tools import PatchTool
@@ -63,10 +64,16 @@ def load_task_split(benchmark_root: Path, split_name: str) -> list[Path]:
     return sorted(tasks_dir.glob("*/task.json"))
 
 
-def load_task(task_file: Path, max_attempts: Optional[int] = None) -> Task:
-    """Build a Task from task.json, optionally overriding its attempt budget."""
+def load_task(task_file: Path, max_attempts: Optional[int] = None, file_hints: bool = True) -> Task:
+    """
+    Build a Task from task.json, optionally overriding its attempt budget. With file_hints=False the
+    metadata.target_file hint is dropped, so the planner must localize the defect from test output.
+    """
     with open(task_file, "r", encoding="utf-8") as f:
         data = json.load(f)
+    metadata = dict(data.get("metadata", {}))
+    if not file_hints:
+        metadata.pop("target_file", None)
 
     return Task(
         task_id=data.get("task_id", task_file.parent.name),
@@ -78,7 +85,7 @@ def load_task(task_file: Path, max_attempts: Optional[int] = None) -> Task:
             max_attempts=max_attempts or data.get("max_attempts", 3),
             timeout_seconds=data.get("timeout_seconds", 30),
         ),
-        metadata=data.get("metadata", {}),
+        metadata=metadata,
     )
 
 
@@ -90,9 +97,11 @@ def run_tasks(
     persist_episodes: bool = True,
     show_progress: bool = False,
     trace_dir: Optional[Path] = None,
+    file_hints: bool = True,
+    sandbox: Optional[ISandboxRunner] = None,
 ) -> List[TaskResult]:
     """Run tasks in throwaway workspaces; persist_episodes=False evaluates against frozen memory."""
-    sandbox = LocalSubprocessSandbox()
+    sandbox = sandbox or LocalSubprocessSandbox()
     test_runner = TestRunnerTool(sandbox)
     evaluator = IndependentEvaluator(test_runner)
     planner = TaskPlanner(ExperienceRetriever(memory_store))
@@ -100,7 +109,7 @@ def run_tasks(
 
     results = []
     for task_file in task_files:
-        task_obj = load_task(task_file, max_attempts)
+        task_obj = load_task(task_file, max_attempts, file_hints)
         patch_tool = PatchTool(root_path=task_obj.repository_path)
         sm = TaskStateMachine(
             planner=planner,
@@ -144,6 +153,8 @@ def run_held_out_comparison(
     results_path: Path,
     trace_dir: Optional[Path] = None,
     trials: int = 1,
+    file_hints: bool = True,
+    sandbox: Optional[ISandboxRunner] = None,
 ) -> None:
     """Run the three-way ablation on held-out tasks `trials` times and report pooled metrics."""
     train_files = load_task_split(benchmark_root, "train")
@@ -154,7 +165,10 @@ def run_held_out_comparison(
 
     trials = max(1, trials)
     console.print(Panel("[bold green]Evaluating Held-Out Benchmark Split across Ablation Conditions[/]"))
-    console.print(f"Train tasks: {len(train_files)} | Held-out tasks: {len(held_out_files)} | Trials: {trials}\n")
+    console.print(
+        f"Train tasks: {len(train_files)} | Held-out tasks: {len(held_out_files)} | Trials: {trials} | "
+        f"File hints: {'on' if file_hints else 'off'}\n"
+    )
     warn_if_mock(model)
 
     names = {
@@ -170,22 +184,28 @@ def run_held_out_comparison(
         # A: zero-shot baseline. Nothing is persisted, so no task can learn from an earlier held-out task.
         console.print("[cyan]  A: zero-shot (no memory, 1 attempt)...[/]")
         runs["A"].append(run_tasks(
-            held_out_files, model, InMemoryMemoryStore(), max_attempts=1, persist_episodes=False, trace_dir=trace_dir
+            held_out_files, model, InMemoryMemoryStore(), max_attempts=1, persist_episodes=False,
+            trace_dir=trace_dir, file_hints=file_hints, sandbox=sandbox,
         ))
 
         console.print("[cyan]  B: retry feedback (no memory, 3 attempts)...[/]")
         runs["B"].append(run_tasks(
-            held_out_files, model, InMemoryMemoryStore(), max_attempts=3, persist_episodes=False, trace_dir=trace_dir
+            held_out_files, model, InMemoryMemoryStore(), max_attempts=3, persist_episodes=False,
+            trace_dir=trace_dir, file_hints=file_hints, sandbox=sandbox,
         ))
 
         # C: memory built from the train split only, then frozen while evaluating held-out tasks.
         # Reusing an old memory DB would leak held-out solutions from earlier runs into the "learning" score.
         console.print("[cyan]  C: learning on train split, then held-out with frozen memory...[/]")
         learned_memory = InMemoryMemoryStore()
-        run_tasks(train_files, model, learned_memory, persist_episodes=True, trace_dir=trace_dir)
+        run_tasks(
+            train_files, model, learned_memory, persist_episodes=True, trace_dir=trace_dir, file_hints=file_hints,
+            sandbox=sandbox,
+        )
         learned_episodes.append(len(learned_memory.get_accepted_episodes()))
         runs["C"].append(run_tasks(
-            held_out_files, model, learned_memory, max_attempts=3, persist_episodes=False, trace_dir=trace_dir
+            held_out_files, model, learned_memory, max_attempts=3, persist_episodes=False,
+            trace_dir=trace_dir, file_hints=file_hints, sandbox=sandbox,
         ))
 
     # Pooled metrics over every trial, plus the spread of the per-trial resolution rates
@@ -247,6 +267,7 @@ def run_held_out_comparison(
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "model": getattr(model, "model_name", type(model).__name__),
                 "trials": trials,
+                "file_hints": file_hints,
                 "train_tasks": [load_task(f).task_id for f in train_files],
                 "held_out_tasks": [load_task(f).task_id for f in held_out_files],
                 "learned_episodes_per_trial": learned_episodes,
@@ -259,6 +280,9 @@ def run_held_out_comparison(
                         "total_tasks": len(held_out_files),
                         "resolution_rate_percent": pooled[cond_id]["resolution_rate_percent"],
                         "resolution_rate_per_trial": per_trial[cond_id],
+                        "solved_tasks_per_trial": [
+                            [res.task_id for res in trial if res.is_successful] for trial in runs[cond_id]
+                        ],
                         "regression_free_rate_percent": (
                             pooled[cond_id]["regression_free_rate_percent"]
                             if pooled[cond_id]["targeted_pass_candidates"]
@@ -283,6 +307,8 @@ def run_benchmark_suite(
     model: IModelBackend,
     split: str = "all",
     trace_dir: Optional[Path] = None,
+    file_hints: bool = True,
+    sandbox: Optional[ISandboxRunner] = None,
 ) -> None:
     """Discover and execute benchmark tasks for given split."""
     task_files = load_task_split(benchmark_root, split)
@@ -293,7 +319,10 @@ def run_benchmark_suite(
     console.print(Panel(f"[bold green]Starting EvoAgent Benchmark Suite [{split}]: {len(task_files)} task(s) found[/]"))
     warn_if_mock(model)
 
-    results = run_tasks(task_files, model, SQLiteMemoryStore(memory_db_path), show_progress=True, trace_dir=trace_dir)
+    results = run_tasks(
+        task_files, model, SQLiteMemoryStore(memory_db_path), show_progress=True, trace_dir=trace_dir,
+        file_hints=file_hints, sandbox=sandbox,
+    )
     metrics = BenchmarkMetricsCalculator.calculate_metrics(results)
 
     table = Table(title=f"EvoAgent Benchmark Performance Summary [{split.upper()}]")
@@ -313,6 +342,11 @@ def run_benchmark_suite(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="EvoAgent Benchmark Runner")
     parser.add_argument("--split", choices=["all", "train", "held_out"], default="all")
+    parser.add_argument(
+        "--benchmark-root",
+        default=str(Path(__file__).parent),
+        help="Directory with split.json and tasks/ (e.g. benchmarks/quixbugs after running import_quixbugs.py)",
+    )
     parser.add_argument("--eval-comparison", action="store_true", help="Run 3-way ablation comparison on held-out tasks")
     parser.add_argument(
         "--provider",
@@ -322,7 +356,22 @@ if __name__ == "__main__":
     )
     parser.add_argument("--model", default=settings.model_name, help="Model name for LLM providers")
     parser.add_argument("--base-url", default=settings.api_base_url, help="OpenAI-compatible endpoint")
+    parser.add_argument(
+        "--request-timeout", type=float, default=settings.request_timeout_seconds, help="Seconds per model response"
+    )
     parser.add_argument("--trials", type=int, default=1, help="Repeat the ablation N times (LLMs are nondeterministic)")
+    parser.add_argument(
+        "--sandbox",
+        choices=["local", "docker"],
+        default=settings.sandbox_backend,
+        help="Where candidate code runs (docker: no network, see docker/sandbox.Dockerfile)",
+    )
+    parser.add_argument("--sandbox-image", default=settings.sandbox_image, help="Image for --sandbox docker")
+    parser.add_argument(
+        "--no-file-hints",
+        action="store_true",
+        help="Drop metadata.target_file so the agent must find the defective file itself",
+    )
     parser.add_argument(
         "--trace-dir",
         default=str(Path(__file__).parent.parent / settings.trace_dir),
@@ -330,14 +379,21 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    suite_dir = Path(__file__).parent
+    suite_dir = Path(args.benchmark_root)
     data_dir = Path(__file__).parent.parent / "data"
     traces = Path(args.trace_dir) if args.trace_dir else None
-    model_backend = create_model_backend(args.provider, args.model, args.base_url, settings.api_key)
+    sandbox_runner = create_sandbox(args.sandbox, args.sandbox_image)
+    model_backend = create_model_backend(
+        args.provider, args.model, args.base_url, settings.api_key, timeout=args.request_timeout
+    )
 
     if args.eval_comparison:
         run_held_out_comparison(
-            suite_dir, model_backend, data_dir / "ablation_results.json", trace_dir=traces, trials=args.trials
+            suite_dir, model_backend, data_dir / "ablation_results.json", trace_dir=traces, trials=args.trials,
+            file_hints=not args.no_file_hints, sandbox=sandbox_runner,
         )
     else:
-        run_benchmark_suite(suite_dir, data_dir / "benchmark_memory.db", model_backend, split=args.split, trace_dir=traces)
+        run_benchmark_suite(
+            suite_dir, data_dir / "benchmark_memory.db", model_backend, split=args.split, trace_dir=traces,
+            file_hints=not args.no_file_hints, sandbox=sandbox_runner,
+        )

@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-mergesort",
+  "repo_dir": "code",
+  "issue_description": "mergesort gives wrong results on some inputs; tests/test_mergesort.py fails",
+  "targeted_test": "tests/test_mergesort.py",
+  "regression_test": "tests/test_mergesort.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "mergesort.py",
+    "defect_class": "multiple-edits",
+    "source": "QuixBugs"
+  }
+}

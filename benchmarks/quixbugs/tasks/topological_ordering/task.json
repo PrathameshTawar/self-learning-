@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-topological_ordering",
+  "repo_dir": "code",
+  "issue_description": "topological_ordering gives wrong results on some inputs; tests/test_topological_ordering.py fails",
+  "targeted_test": "tests/test_topological_ordering.py",
+  "regression_test": "tests/test_topological_ordering.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "topological_ordering.py",
+    "defect_class": "wrong-variable",
+    "source": "QuixBugs"
+  }
+}

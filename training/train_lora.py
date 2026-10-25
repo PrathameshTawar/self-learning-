@@ -12,6 +12,7 @@ def train_adapter(
     output_dir: str,
     epochs: int = 3,
     learning_rate: float = 2e-4,
+    max_seq_length: int = 512,
 ) -> None:
     """
     Launch Q-LoRA fine-tuning with 4-bit quantization and gradient checkpointing
@@ -83,8 +84,21 @@ def train_adapter(
     dataset = load_dataset("json", data_files=dataset_path, split="train")
     dataset = dataset.filter(lambda row: (row.get("split") or "train") == "train")
 
+    def format_prompt(prompt: str, completion: str) -> str:
+        return f"### Instruction:\n{prompt}\n\n### Response:\n{completion}"
+
+    # SFTTrainer truncates from the end, so an over-long example would lose the response it should learn
+    total = len(dataset)
+    dataset = dataset.filter(
+        lambda row: len(tokenizer(format_prompt(row["prompt"], row["completion"]))["input_ids"]) <= max_seq_length
+    )
+    print(f"Training on {len(dataset)} of {total} examples that fit in {max_seq_length} tokens")
+    if len(dataset) == 0:
+        print("No example fits. Raise --max-seq-length; trace-based prompts include the code under repair.")
+        return
+
     def format_prompts(batch):
-        return [f"### Instruction:\n{p}\n\n### Response:\n{c}" for p, c in zip(batch["prompt"], batch["completion"])]
+        return [format_prompt(p, c) for p, c in zip(batch["prompt"], batch["completion"])]
 
     training_args = TrainingArguments(
         output_dir=output_dir,
@@ -103,7 +117,7 @@ def train_adapter(
         model=model,
         train_dataset=dataset,
         formatting_func=format_prompts,
-        max_seq_length=512,  # Constrain sequence length to avoid VRAM overflow
+        max_seq_length=max_seq_length,  # Constrain sequence length to avoid VRAM overflow
         tokenizer=tokenizer,
         args=training_args,
     )
@@ -124,6 +138,9 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", default="model_weights/evoagent_adapter", help="Directory to save adapter")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument(
+        "--max-seq-length", type=int, default=512, help="Longest example in tokens (VRAM bound); longer ones are skipped"
+    )
 
     args = parser.parse_args()
-    train_adapter(args.base_model, args.dataset, args.output_dir, args.epochs, args.lr)
+    train_adapter(args.base_model, args.dataset, args.output_dir, args.epochs, args.lr, args.max_seq_length)

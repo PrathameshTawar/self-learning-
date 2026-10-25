@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-sqrt",
+  "repo_dir": "code",
+  "issue_description": "sqrt gives wrong results on some inputs; tests/test_sqrt.py fails",
+  "targeted_test": "tests/test_sqrt.py",
+  "regression_test": "tests/test_sqrt.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "sqrt.py",
+    "defect_class": "missing-expression",
+    "source": "QuixBugs"
+  }
+}

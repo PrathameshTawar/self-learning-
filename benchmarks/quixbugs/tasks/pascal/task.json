@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-pascal",
+  "repo_dir": "code",
+  "issue_description": "pascal gives wrong results on some inputs; tests/test_pascal.py fails",
+  "targeted_test": "tests/test_pascal.py",
+  "regression_test": "tests/test_pascal.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "pascal.py",
+    "defect_class": "off-by-one",
+    "source": "QuixBugs"
+  }
+}

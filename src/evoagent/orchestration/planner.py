@@ -3,6 +3,7 @@ Task planner responsible for forming hypotheses from failure traces, memory less
 and strategy gene configurations.
 """
 
+import ast
 from pathlib import Path
 import re
 from typing import List, Optional
@@ -13,6 +14,14 @@ from evoagent.tools.search_tools import CodeSearcher
 
 # pytest summary timings such as " in 0.03s" or " in 65.40s (0:01:05)"
 PYTEST_DURATION_RE = re.compile(r" in \d+(?:\.\d+)?s(?: \(\d+:\d{2}:\d{2}\))?")
+# Traceback frames: pytest --tb=short ("parser.py:4: in first_field") and CPython ('File "x.py", line 4')
+TRACE_FRAME_RE = re.compile(r'^(\S+\.py):\d+: in \S+|File "([^"]+\.py)", line \d+', re.MULTILINE)
+
+
+def _is_test_file(rel_path: str) -> bool:
+    parts = Path(rel_path).parts
+    name = parts[-1] if parts else ""
+    return name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py" or "tests" in parts[:-1]
 
 
 class TaskPlanner:
@@ -47,27 +56,65 @@ class TaskPlanner:
         text = f"{test_result.stdout}\n{test_result.stderr}".replace(str(task.repository_path), ".")
         return PYTEST_DURATION_RE.sub("", text)
 
+    @staticmethod
+    def _repo_relative(repo: Path, raw_path: str) -> Optional[str]:
+        """Map a path printed in test output to a file inside the repository, if it is one."""
+        path = Path(raw_path)
+        try:
+            rel = path.resolve().relative_to(repo.resolve()) if path.is_absolute() else path
+        except ValueError:
+            return None  # outside the repository, e.g. site-packages
+        return rel.as_posix() if (repo / rel).is_file() else None
+
     def locate_target_file(self, task: Task, test_result: TestResult, searcher: CodeSearcher) -> str:
-        """Determine which source file contains the defect."""
+        """
+        Determine which source file contains the defect:
+        1. an explicit metadata.target_file hint;
+        2. the deepest non-test frame of the failing test's traceback;
+        3. for failures raised in the test itself (assertions), the repository module the failing
+           test imports, preferring one whose imported names appear in the failure output;
+        4. the first non-test Python file.
+        """
         if "target_file" in task.metadata:
             return task.metadata["target_file"]
 
-        # Parse from test stdout traceback
+        repo = task.repository_path
         output = f"{test_result.stdout}\n{test_result.stderr}"
-        matches = re.findall(r'File "([^"]+\.py)", line \d+', output)
-        for m in reversed(matches):
-            p = Path(m)
-            try:
-                rel = p.relative_to(task.repository_path).as_posix()
-                if not rel.startswith("tests/") and not rel.startswith("test_"):
-                    return rel
-            except Exception:
-                if not m.startswith("test") and "/test" not in m:
-                    return Path(m).as_posix()
+        frames = [
+            rel
+            for match in TRACE_FRAME_RE.finditer(output)
+            if (rel := self._repo_relative(repo, match.group(1) or match.group(2)))
+        ]
+        source_frames = [f for f in frames if not _is_test_file(f)]
+        if source_frames:
+            return source_frames[-1]
 
-        # Fallback: find source files matching test name
+        test_files = [f for f in frames if _is_test_file(f)]
+        targeted = self._repo_relative(repo, task.targeted_test.split()[0].split("::")[0]) if task.targeted_test else None
+        candidates: List[tuple] = []
+        for test_file in dict.fromkeys(test_files + ([targeted] if targeted else [])):
+            try:
+                tree = ast.parse((repo / test_file).read_text(encoding="utf-8"))
+            except (OSError, SyntaxError, ValueError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                    modules, names = [node.module], [alias.name for alias in node.names]
+                elif isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                    names = [m.split(".")[-1] for m in modules]
+                else:
+                    continue
+                for module in modules:
+                    for rel in (f"{module.replace('.', '/')}.py", f"{module.replace('.', '/')}/__init__.py"):
+                        if (repo / rel).is_file() and not _is_test_file(rel):
+                            mentioned = any(name in output for name in names)
+                            candidates.append((not mentioned, rel))
+        if candidates:
+            return min(candidates, key=lambda c: c[0])[1]
+
         files = searcher.list_files(".py")
-        non_test_files = [f for f in files if "test" not in f]
+        non_test_files = [f for f in files if not _is_test_file(f)]
         return non_test_files[0] if non_test_files else "src/main.py"
 
     def _get_prompt_style_instruction(self, style: str) -> str:

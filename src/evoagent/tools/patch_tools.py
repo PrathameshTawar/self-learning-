@@ -4,7 +4,7 @@ Patch validation, safety checks, SEARCH/REPLACE block processor, and unified dif
 
 from pathlib import Path
 import re
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 from evoagent.domain.models import PatchProposal
 
 # One SEARCH/REPLACE block. Either section may be empty; the divider and closing marker must start a line.
@@ -122,6 +122,70 @@ class PatchTool:
 
         return None, "was not found in target file"
 
+    @staticmethod
+    def _find_reindented(
+        lines: List[str], block: List[str], hint: Optional[int] = None
+    ) -> Tuple[Optional[int], Optional[Callable[[str], str]], Optional[str]]:
+        """
+        Locate block when its indentation differs from the file by one consistent offset (small
+        models often drop or add the enclosing indentation). Returns the start index and a function
+        that shifts lines by that offset, so the replacement can be re-indented to match.
+        """
+        anchor = next((line for line in block if line.strip()), None)
+        if anchor is None:
+            return None, None, "has no lines to anchor it"
+        size = len(block)
+        anchor_index = block.index(anchor)
+        anchor_ws = anchor[: len(anchor) - len(anchor.lstrip())]
+
+        found = []
+        for start in range(len(lines) - size + 1):
+            file_anchor = lines[start + anchor_index]
+            if file_anchor.strip() != anchor.strip():
+                continue
+            file_ws = file_anchor[: len(file_anchor) - len(file_anchor.lstrip())]
+            if file_ws.endswith(anchor_ws):
+                prefix = file_ws[: len(file_ws) - len(anchor_ws)]
+
+                def shift(line: str, prefix: str = prefix) -> str:
+                    return prefix + line if line.strip() else line
+            elif anchor_ws.endswith(file_ws):
+                drop = len(anchor_ws) - len(file_ws)
+
+                def shift(line: str, drop: int = drop) -> str:
+                    return line[drop:] if line[:drop].isspace() else line.lstrip()
+            else:
+                continue
+            if all(
+                lines[start + i].rstrip() == shift(line).rstrip() for i, line in enumerate(block) if line.strip()
+            ) and all(not lines[start + i].strip() for i, line in enumerate(block) if not line.strip()):
+                found.append((start, shift))
+
+        if len(found) == 1:
+            return found[0][0], found[0][1], None
+        if len(found) > 1:
+            if hint is not None:
+                start, shift = min(found, key=lambda item: abs(item[0] - hint))
+                return start, shift, None
+            return None, None, f"matches {len(found)} locations; include more surrounding lines to make it unique"
+        return None, None, "was not found in target file"
+
+    @classmethod
+    def _replace_block(
+        cls, lines: List[str], block: List[str], replacement: List[str], hint: Optional[int] = None
+    ) -> Tuple[Optional[List[str]], Optional[str]]:
+        """Replace block with replacement in lines; returns the new lines or an error message."""
+        start, error = cls._find_block(lines, block, hint)
+        if start is not None:
+            return lines[:start] + replacement + lines[start + len(block):], None
+        if error and error.startswith("matches"):
+            return None, error
+
+        start, shift, error = cls._find_reindented(lines, block, hint)
+        if start is None:
+            return None, error
+        return lines[:start] + [shift(line) for line in replacement] + lines[start + len(block):], None
+
     def _apply_search_replace_blocks(
         self, original_text: str, patch_text: str
     ) -> Tuple[bool, str, Optional[str]]:
@@ -137,12 +201,12 @@ class PatchTool:
         for idx, match in enumerate(matches, 1):
             search_lines = self._split_block(match.group(1))
             replace_lines = self._split_block(match.group(2))
-            start, error = self._find_block(lines, search_lines)
-            if start is None:
+            new_lines, error = self._replace_block(lines, search_lines, replace_lines)
+            if new_lines is None:
                 preview = "\n".join(search_lines)
                 preview = preview[:60] + "..." if len(preview) > 60 else preview
                 return False, original_text, f"SEARCH block #{idx} {error}: {preview!r}"
-            lines[start:start + len(search_lines)] = replace_lines
+            lines = new_lines
 
         return True, "\n".join(lines), None
 
@@ -189,10 +253,10 @@ class PatchTool:
         lines = original_text.replace("\r\n", "\n").split("\n")
         offset = 0
         for idx, (hint, before, after) in enumerate(hunks, 1):
-            start, error = self._find_block(lines, before, None if hint is None else hint + offset)
-            if start is None:
+            new_lines, error = self._replace_block(lines, before, after, None if hint is None else hint + offset)
+            if new_lines is None:
                 return False, original_text, f"hunk #{idx} {error}"
-            lines[start:start + len(before)] = after
+            lines = new_lines
             offset += len(after) - len(before)
 
         return True, "\n".join(lines), None

@@ -1,0 +1,14 @@
+{
+  "task_id": "quixbugs-sieve",
+  "repo_dir": "code",
+  "issue_description": "sieve gives wrong results on some inputs; tests/test_sieve.py fails",
+  "targeted_test": "tests/test_sieve.py",
+  "regression_test": "tests/test_sieve.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "sieve.py",
+    "defect_class": "wrong-variable",
+    "source": "QuixBugs"
+  }
+}
