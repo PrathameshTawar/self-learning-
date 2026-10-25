@@ -68,7 +68,8 @@ async function fetchExperiments() {
     if (!data.conditions || data.conditions.length === 0) return;
 
     const meta = document.getElementById("experiments-meta");
-    if (meta) meta.innerText = `${data.model} • ${data.generated_at.slice(0, 10)}`;
+    const trials = data.trials > 1 ? ` • mean of ${data.trials} trials` : "";
+    if (meta) meta.innerText = `${data.model} • ${data.generated_at.slice(0, 10)}${trials}`;
 
     const tbody = document.getElementById("experiments-table-body");
     tbody.innerHTML = "";
