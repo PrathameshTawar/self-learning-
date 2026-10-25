@@ -5,7 +5,7 @@ Prefers high-reliability SEARCH/REPLACE blocks suited for small LLMs (e.g. Qwen2
 
 import json
 import re
-from typing import Optional
+from typing import Dict, List, Optional
 import httpx
 from evoagent.models.base import IModelBackend, ModelPrompt, ModelResponse
 from evoagent.tools.patch_tools import SEARCH_REPLACE_BLOCK_RE
@@ -76,6 +76,13 @@ class OpenAICompatibleModel(IModelBackend):
             "Provide your hypothesis and SEARCH/REPLACE block fix."
         )
 
+    def build_messages(self, prompt: ModelPrompt) -> List[Dict[str, str]]:
+        """Chat messages sent for a prompt; also used to rebuild training prompts from traces."""
+        return [
+            {"role": "system", "content": self._build_system_prompt(prompt)},
+            {"role": "user", "content": self._build_user_message(prompt)},
+        ]
+
     def generate_repair_proposal(self, prompt: ModelPrompt) -> ModelResponse:
         """Call OpenAI-compatible chat completions endpoint."""
         url = f"{self.base_url}/chat/completions"
@@ -85,10 +92,7 @@ class OpenAICompatibleModel(IModelBackend):
         }
         payload = {
             "model": self.model_name,
-            "messages": [
-                {"role": "system", "content": self._build_system_prompt(prompt)},
-                {"role": "user", "content": self._build_user_message(prompt)},
-            ],
+            "messages": self.build_messages(prompt),
             "temperature": prompt.temperature if prompt.temperature is not None else self.temperature,
         }
 

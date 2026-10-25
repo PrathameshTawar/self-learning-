@@ -87,6 +87,7 @@ def run_tasks(
     max_attempts: Optional[int] = None,
     persist_episodes: bool = True,
     show_progress: bool = False,
+    trace_dir: Optional[Path] = None,
 ) -> List[TaskResult]:
     """Run tasks in throwaway workspaces; persist_episodes=False evaluates against frozen memory."""
     sandbox = LocalSubprocessSandbox()
@@ -107,6 +108,7 @@ def run_tasks(
             patch_tool=patch_tool,
             git_inspector=git_inspector,
             test_runner=test_runner,
+            trace_dir=trace_dir,
         )
 
         if show_progress:
@@ -134,7 +136,9 @@ def warn_if_mock(model: IModelBackend) -> None:
         )
 
 
-def run_held_out_comparison(benchmark_root: Path, model: IModelBackend, results_path: Path) -> None:
+def run_held_out_comparison(
+    benchmark_root: Path, model: IModelBackend, results_path: Path, trace_dir: Optional[Path] = None
+) -> None:
     """Run three-way ablation on held-out tasks and present comparative metrics table."""
     train_files = load_task_split(benchmark_root, "train")
     held_out_files = load_task_split(benchmark_root, "held_out")
@@ -149,21 +153,27 @@ def run_held_out_comparison(benchmark_root: Path, model: IModelBackend, results_
     # Condition A: Zero-Shot Baseline (No Memory, 1 Attempt). Nothing is persisted, so no task
     # can learn from an earlier held-out task.
     console.print("[cyan][1/3] Running Zero-Shot Baseline (No Memory, 1 Attempt)...[/]")
-    res_a = run_tasks(held_out_files, model, InMemoryMemoryStore(), max_attempts=1, persist_episodes=False)
+    res_a = run_tasks(
+        held_out_files, model, InMemoryMemoryStore(), max_attempts=1, persist_episodes=False, trace_dir=trace_dir
+    )
     metrics_a = BenchmarkMetricsCalculator.calculate_metrics(res_a)
 
     # Condition B: Multi-Attempt with Feedback (No Memory, 3 Attempts)
     console.print("[cyan][2/3] Running Multi-Attempt with Retry Feedback (No Memory, 3 Attempts)...[/]")
-    res_b = run_tasks(held_out_files, model, InMemoryMemoryStore(), max_attempts=3, persist_episodes=False)
+    res_b = run_tasks(
+        held_out_files, model, InMemoryMemoryStore(), max_attempts=3, persist_episodes=False, trace_dir=trace_dir
+    )
     metrics_b = BenchmarkMetricsCalculator.calculate_metrics(res_b)
 
     # Condition C: memory built from the train split only, then frozen while evaluating held-out tasks.
     # Reusing an old memory DB would leak held-out solutions from earlier runs into the "learning" score.
     console.print("[cyan][3/3] Learning on train split, then evaluating held-out tasks with frozen memory...[/]")
     learned_memory = InMemoryMemoryStore()
-    run_tasks(train_files, model, learned_memory, persist_episodes=True)
+    run_tasks(train_files, model, learned_memory, persist_episodes=True, trace_dir=trace_dir)
     learned_episodes = len(learned_memory.get_accepted_episodes())
-    res_c = run_tasks(held_out_files, model, learned_memory, max_attempts=3, persist_episodes=False)
+    res_c = run_tasks(
+        held_out_files, model, learned_memory, max_attempts=3, persist_episodes=False, trace_dir=trace_dir
+    )
     metrics_c = BenchmarkMetricsCalculator.calculate_metrics(res_c)
 
     conditions = [
@@ -237,7 +247,13 @@ def run_held_out_comparison(benchmark_root: Path, model: IModelBackend, results_
     console.print(f"Results written to {results_path.as_posix()}")
 
 
-def run_benchmark_suite(benchmark_root: Path, memory_db_path: Path, model: IModelBackend, split: str = "all") -> None:
+def run_benchmark_suite(
+    benchmark_root: Path,
+    memory_db_path: Path,
+    model: IModelBackend,
+    split: str = "all",
+    trace_dir: Optional[Path] = None,
+) -> None:
     """Discover and execute benchmark tasks for given split."""
     task_files = load_task_split(benchmark_root, split)
     if not task_files:
@@ -247,7 +263,7 @@ def run_benchmark_suite(benchmark_root: Path, memory_db_path: Path, model: IMode
     console.print(Panel(f"[bold green]Starting EvoAgent Benchmark Suite [{split}]: {len(task_files)} task(s) found[/]"))
     warn_if_mock(model)
 
-    results = run_tasks(task_files, model, SQLiteMemoryStore(memory_db_path), show_progress=True)
+    results = run_tasks(task_files, model, SQLiteMemoryStore(memory_db_path), show_progress=True, trace_dir=trace_dir)
     metrics = BenchmarkMetricsCalculator.calculate_metrics(results)
 
     table = Table(title=f"EvoAgent Benchmark Performance Summary [{split.upper()}]")
@@ -276,13 +292,19 @@ if __name__ == "__main__":
     )
     parser.add_argument("--model", default=settings.model_name, help="Model name for LLM providers")
     parser.add_argument("--base-url", default=settings.api_base_url, help="OpenAI-compatible endpoint")
+    parser.add_argument(
+        "--trace-dir",
+        default=str(Path(__file__).parent.parent / settings.trace_dir),
+        help="Directory for per-attempt JSON traces; pass an empty string to disable",
+    )
     args = parser.parse_args()
 
     suite_dir = Path(__file__).parent
     data_dir = Path(__file__).parent.parent / "data"
+    traces = Path(args.trace_dir) if args.trace_dir else None
     model_backend = create_model_backend(args.provider, args.model, args.base_url, settings.api_key)
 
     if args.eval_comparison:
-        run_held_out_comparison(suite_dir, model_backend, data_dir / "ablation_results.json")
+        run_held_out_comparison(suite_dir, model_backend, data_dir / "ablation_results.json", trace_dir=traces)
     else:
-        run_benchmark_suite(suite_dir, data_dir / "benchmark_memory.db", model_backend, split=args.split)
+        run_benchmark_suite(suite_dir, data_dir / "benchmark_memory.db", model_backend, split=args.split, trace_dir=traces)

@@ -2,12 +2,14 @@
 State machine engine governing the autonomous repair lifecycle and learning loop.
 """
 
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 import shutil
 import tempfile
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 from evoagent.domain.models import (
     AttemptRecord,
     MemoryEpisodeRecord,
@@ -19,6 +21,7 @@ from evoagent.domain.models import (
 from evoagent.domain.states import TaskState
 from evoagent.evaluation.evaluator import IndependentEvaluator
 from evoagent.memory.store import IMemoryStore
+from evoagent.models.base import ModelPrompt
 from evoagent.orchestration.planner import TaskPlanner
 from evoagent.orchestration.repair_agent import RepairAgent
 from evoagent.tools.git_tools import GitInspector
@@ -46,6 +49,7 @@ class TaskStateMachine:
         patch_tool: PatchTool,
         git_inspector: GitInspector,
         test_runner: TestRunnerTool,
+        trace_dir: Optional[Path] = None,
     ) -> None:
         self.planner = planner
         self.repair_agent = repair_agent
@@ -54,6 +58,38 @@ class TaskStateMachine:
         self.patch_tool = patch_tool
         self.git_inspector = git_inspector
         self.test_runner = test_runner
+        # When set, every run writes a JSON trace of what the model saw and returned per attempt
+        self.trace_dir = trace_dir
+
+    def _write_trace(
+        self,
+        task: Task,
+        strategy_id: str,
+        failure_sig: str,
+        final_state: TaskState,
+        duration: float,
+        attempt_traces: List[Dict[str, Any]],
+    ) -> Path:
+        """Write one JSON file per run under trace_dir and return its path."""
+        self.trace_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        trace_file = self.trace_dir / f"{task.task_id}-{stamp}-{uuid.uuid4().hex[:8]}.json"
+        trace_file.write_text(
+            json.dumps(
+                {
+                    "task_id": task.task_id,
+                    "issue_description": task.issue_description,
+                    "strategy_id": strategy_id,
+                    "failure_signature": failure_sig,
+                    "final_state": final_state.value,
+                    "duration_seconds": round(duration, 2),
+                    "attempts": attempt_traces,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return trace_file
 
     def execute_task(
         self,
@@ -69,8 +105,23 @@ class TaskStateMachine:
         Pass persist_episode=False to evaluate against frozen memory (held-out runs, tournaments).
         """
         start_time = time.perf_counter()
-        attempts = []
+        attempts: List[AttemptRecord] = []
+        attempt_traces: List[Dict[str, Any]] = []
         accepted_patch: Optional[PatchProposal] = None
+
+        def finish_attempt(record: AttemptRecord, prompt: ModelPrompt, feedback: Optional[str]) -> None:
+            """Record the attempt, plus the exact model input/output and the feedback it produced."""
+            attempts.append(record)
+            attempt_traces.append({
+                "attempt_number": record.attempt_number,
+                "state": record.state.value,
+                "prompt": prompt.model_dump(),
+                "hypothesis": record.hypothesis,
+                "model_output": record.patch.model_output if record.patch else "",
+                "patch": record.patch.diff_unified if record.patch else "",
+                "evaluation": record.evaluation.model_dump() if record.evaluation else None,
+                "feedback_for_next_attempt": feedback,
+            })
 
         # Extract strategy genes if provided
         prompt_style = getattr(strategy, "prompt_style", "minimal_diff")
@@ -172,7 +223,7 @@ class TaskStateMachine:
                     prev_attempt_patch = candidate_patch.diff_unified or "(empty diff)"
                     prev_attempt_error = candidate_patch.validation_error or "Empty or malformed patch proposal."
                     attempt_record.state = TaskState.RETRYABLE_FAILURE
-                    attempts.append(attempt_record)
+                    finish_attempt(attempt_record, prompt, prev_attempt_error)
                     continue
 
                 # Step 3c: Apply patch inside throwaway workspace
@@ -181,7 +232,7 @@ class TaskStateMachine:
                     prev_attempt_patch = candidate_patch.diff_unified
                     prev_attempt_error = f"Patch application failed: {apply_msg}"
                     attempt_record.state = TaskState.RETRYABLE_FAILURE
-                    attempts.append(attempt_record)
+                    finish_attempt(attempt_record, prompt, prev_attempt_error)
                     # Restore clean working directory
                     shutil.rmtree(work_dir, ignore_errors=True)
                     shutil.copytree(clean_dir, work_dir)
@@ -201,7 +252,7 @@ class TaskStateMachine:
 
                 if evaluation.is_accepted:
                     attempt_record.state = TaskState.SUCCEEDED
-                    attempts.append(attempt_record)
+                    finish_attempt(attempt_record, prompt, None)
                     accepted_patch = candidate_patch
                     break
                 else:
@@ -214,7 +265,7 @@ class TaskStateMachine:
                     shutil.rmtree(work_dir, ignore_errors=True)
                     shutil.copytree(clean_dir, work_dir)
                     attempt_record.state = TaskState.RETRYABLE_FAILURE
-                    attempts.append(attempt_record)
+                    finish_attempt(attempt_record, prompt, prev_attempt_error)
 
             # Step 4: Learning review & memory persistence (Layer A)
             final_state = TaskState.COMPLETED if accepted_patch else TaskState.FAILED
@@ -262,6 +313,8 @@ class TaskStateMachine:
             )
             if persist_episode:
                 self.memory_store.save_episode(episode)
+            if self.trace_dir is not None:
+                self._write_trace(task, strategy_id, failure_sig, final_state, total_duration, attempt_traces)
 
             return TaskResult(
                 task_id=task.task_id,

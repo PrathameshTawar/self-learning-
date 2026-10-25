@@ -32,6 +32,7 @@ class RepairAgent:
             rationale=response.hypothesis or response.explanation,
             lines_added=added,
             lines_removed=removed,
+            model_output=response.explanation,
         )
 
         # Pre-flight format validation

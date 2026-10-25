@@ -53,6 +53,7 @@ def _build_state_machine(memory_path: Path) -> TaskStateMachine:
         patch_tool=patch_tool,
         git_inspector=git_inspector,
         test_runner=test_runner,
+        trace_dir=settings.trace_dir,
     )
 
 
