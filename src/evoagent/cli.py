@@ -53,6 +53,7 @@ def _build_state_machine(memory_path: Path) -> TaskStateMachine:
         patch_tool=patch_tool,
         git_inspector=git_inspector,
         test_runner=test_runner,
+        trace_dir=settings.trace_dir,
     )
 
 
@@ -148,13 +149,15 @@ def memory_list(memory_db: str) -> None:
 @main.command()
 @click.option("--output", "-o", default="data/curated_sft.jsonl", help="Output JSONL file path")
 @click.option("--memory-db", default="data/evoagent_memory.db", help="Path to SQLite memory file")
-def export_dataset(output: str, memory_db: str) -> None:
-    """Export verified repairs into SFT training dataset."""
-    store = SQLiteMemoryStore(Path(memory_db))
-    curator = DatasetCurator(store)
+@click.option("--trace-dir", default=str(settings.trace_dir), help="Run traces (preferred source of full prompts)")
+def export_dataset(output: str, memory_db: str, trace_dir: str) -> None:
+    """Export verified repairs as an SFT dataset, plus DPO pairs built from traces."""
+    curator = DatasetCurator(SQLiteMemoryStore(Path(memory_db)))
     out_path = Path(output)
-    curator.export_dataset_jsonl(out_path)
-    console.print(f"[bold green]Successfully exported training dataset to {out_path}[/]")
+    rows = curator.export_dataset_jsonl(out_path, trace_dir=Path(trace_dir))
+    dpo_path = out_path.with_name(f"{out_path.stem}_dpo.jsonl")
+    pairs = curator.export_dpo_jsonl(dpo_path, Path(trace_dir))
+    console.print(f"[bold green]Exported {rows} SFT rows to {out_path} and {pairs} DPO pairs to {dpo_path}[/]")
 
 
 @main.command()

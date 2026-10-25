@@ -1,0 +1,13 @@
+{
+  "task_id": "bug-008-cache-ttl",
+  "repo_dir": "code",
+  "issue_description": "fresh_entries returns the stale cache entries and drops the recent ones",
+  "targeted_test": "tests/test_cache.py -k test_returns_only_recent_entries",
+  "regression_test": "tests/test_cache.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "cache.py",
+    "defect_class": "inverted-comparison"
+  }
+}

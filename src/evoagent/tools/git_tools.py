@@ -30,12 +30,6 @@ class GitInspector:
             return []
         return [line.strip() for line in outcome.stdout.strip().splitlines() if line.strip()]
 
-    def reset_working_tree(self, repo_path: Path) -> bool:
-        """Reset uncommitted changes to restore clean repository state."""
-        outcome = self.sandbox.execute_command("git checkout -- .", cwd=repo_path)
-        clean_outcome = self.sandbox.execute_command("git clean -fd", cwd=repo_path)
-        return outcome.passed and clean_outcome.passed
-
     def get_current_head_commit(self, repo_path: Path) -> Optional[str]:
         """Return the SHA-1 hash of the current HEAD commit."""
         outcome = self.sandbox.execute_command("git rev-parse HEAD", cwd=repo_path)

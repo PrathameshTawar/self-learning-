@@ -48,6 +48,7 @@ class PatchProposal(BaseModel):
     lines_removed: int = 0
     is_valid_format: bool = True
     validation_error: Optional[str] = None
+    model_output: str = Field(default="", description="Raw model response, kept for traces and training data")
 
 
 class TestResult(BaseModel):

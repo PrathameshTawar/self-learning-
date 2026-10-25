@@ -16,6 +16,11 @@ def main() -> None:
         help="Path to SQLite memory database",
     )
     parser.add_argument(
+        "--trace-dir",
+        default="logs/traces",
+        help="Run traces; preferred because they contain the full prompt the model saw",
+    )
+    parser.add_argument(
         "--output-dir",
         default="data/training_splits",
         help="Directory to save JSONL dataset files",
@@ -23,10 +28,11 @@ def main() -> None:
     args = parser.parse_args()
 
     db_path = Path(args.db_path)
+    trace_dir = Path(args.trace_dir)
     output_dir = Path(args.output_dir)
 
-    if not db_path.exists():
-        print(f"Memory database not found at {db_path}. Run benchmark tasks first to collect verified episodes.")
+    if not db_path.exists() and not trace_dir.exists():
+        print(f"Neither {db_path} nor {trace_dir} exists. Run benchmark tasks first to collect verified repairs.")
         return
 
     store = SQLiteMemoryStore(db_path)
@@ -34,9 +40,11 @@ def main() -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     sft_out = output_dir / "sft_dataset.jsonl"
-    curator.export_dataset_jsonl(sft_out)
+    rows = curator.export_dataset_jsonl(sft_out, trace_dir=trace_dir)
+    dpo_out = output_dir / "dpo_dataset.jsonl"
+    pairs = curator.export_dpo_jsonl(dpo_out, trace_dir)
 
-    print(f"Exported SFT dataset to {sft_out}")
+    print(f"Exported {rows} SFT rows to {sft_out} and {pairs} DPO pairs to {dpo_out}")
 
 
 if __name__ == "__main__":

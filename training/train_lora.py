@@ -78,8 +78,10 @@ def train_adapter(
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    # Load dataset
+    # Load dataset. load_dataset's "train" split is the whole file, so keep only rows the
+    # exporter assigned to train; val/test tasks must stay unseen
     dataset = load_dataset("json", data_files=dataset_path, split="train")
+    dataset = dataset.filter(lambda row: (row.get("split") or "train") == "train")
 
     def format_prompts(batch):
         return [f"### Instruction:\n{p}\n\n### Response:\n{c}" for p, c in zip(batch["prompt"], batch["completion"])]

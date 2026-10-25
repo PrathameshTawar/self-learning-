@@ -8,6 +8,7 @@
   "timeout_seconds": 30,
   "metadata": {
     "target_file": "limiter.py",
-    "failure_type": "AssertionError"
+    "failure_type": "AssertionError",
+    "defect_class": "inverted-comparison"
   }
 }

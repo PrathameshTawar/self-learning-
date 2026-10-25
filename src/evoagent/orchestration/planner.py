@@ -11,6 +11,9 @@ from evoagent.memory.retrieval import ExperienceRetriever
 from evoagent.models.base import ModelPrompt
 from evoagent.tools.search_tools import CodeSearcher
 
+# pytest summary timings such as " in 0.03s" or " in 65.40s (0:01:05)"
+PYTEST_DURATION_RE = re.compile(r" in \d+(?:\.\d+)?s(?: \(\d+:\d{2}:\d{2}\))?")
+
 
 class TaskPlanner:
     """
@@ -34,6 +37,15 @@ class TaskPlanner:
                 return line.strip()
 
         return "Unspecified test failure"
+
+    @staticmethod
+    def failure_text(task: Task, test_result: TestResult) -> str:
+        """
+        Test output for prompts with per-run noise (timings, the throwaway workspace path) removed,
+        so the same failure always produces the same prompt.
+        """
+        text = f"{test_result.stdout}\n{test_result.stderr}".replace(str(task.repository_path), ".")
+        return PYTEST_DURATION_RE.sub("", text)
 
     def locate_target_file(self, task: Task, test_result: TestResult, searcher: CodeSearcher) -> str:
         """Determine which source file contains the defect."""
@@ -86,6 +98,7 @@ class TaskPlanner:
         """Construct prompt incorporating strategy genes, context, retry feedback, and memory lessons."""
         signature = self.extract_failure_signature(pre_test)
         target_file = self.locate_target_file(task, pre_test, searcher)
+        failure_trace = self.failure_text(task, pre_test)
 
         # 1. Assemble context respecting enable_multi_file_context gene
         content = ""
@@ -95,7 +108,7 @@ class TaskPlanner:
                 builder = MultiFileContextBuilder(task.repository_path)
                 ctx = builder.build_context(
                     primary_file=target_file,
-                    failure_trace=f"{pre_test.stdout}\n{pre_test.stderr}",
+                    failure_trace=failure_trace,
                 )
                 content = ctx["formatted_context"]
             except Exception:
@@ -113,7 +126,7 @@ class TaskPlanner:
         lessons = self.retriever.retrieve_relevant_lessons(
             failure_signature=signature,
             issue_description=task.issue_description,
-            failure_trace=f"{pre_test.stdout}\n{pre_test.stderr}",
+            failure_trace=failure_trace,
             max_results=retrieval_top_k,
             policy=retrieval_policy,
         )
@@ -123,7 +136,7 @@ class TaskPlanner:
         return ModelPrompt(
             task_id=task.task_id,
             issue_description=task.issue_description,
-            failure_trace=f"{pre_test.stdout}\n{pre_test.stderr}",
+            failure_trace=failure_trace,
             target_file=target_file,
             file_content=content,
             retrieved_lessons=lessons,

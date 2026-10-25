@@ -8,6 +8,7 @@
   "timeout_seconds": 30,
   "metadata": {
     "target_file": "merger.py",
-    "failure_type": "AttributeError"
+    "failure_type": "AttributeError",
+    "defect_class": "none-guard"
   }
 }

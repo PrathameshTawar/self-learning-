@@ -10,6 +10,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import statistics
 import sys
 from typing import Any, Dict, List, Optional
 from rich.console import Console
@@ -22,11 +23,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from evoagent.config import settings
 from evoagent.domain.models import ExecutionBudget, Task, TaskResult
 from evoagent.evaluation.evaluator import IndependentEvaluator
-from evoagent.evaluation.metrics import BenchmarkMetricsCalculator
+from evoagent.evaluation.metrics import BenchmarkMetricsCalculator, mcnemar_exact_p
 from evoagent.memory.retrieval import ExperienceRetriever
 from evoagent.memory.store import IMemoryStore, InMemoryMemoryStore, SQLiteMemoryStore
 from evoagent.models.base import IModelBackend
 from evoagent.models.factory import LLM_PROVIDERS, create_model_backend
+from evoagent.models.heuristic_model import HeuristicCodingModel
 from evoagent.orchestration.planner import TaskPlanner
 from evoagent.orchestration.repair_agent import RepairAgent
 from evoagent.orchestration.state_machine import TaskStateMachine
@@ -87,6 +89,7 @@ def run_tasks(
     max_attempts: Optional[int] = None,
     persist_episodes: bool = True,
     show_progress: bool = False,
+    trace_dir: Optional[Path] = None,
 ) -> List[TaskResult]:
     """Run tasks in throwaway workspaces; persist_episodes=False evaluates against frozen memory."""
     sandbox = LocalSubprocessSandbox()
@@ -107,6 +110,7 @@ def run_tasks(
             patch_tool=patch_tool,
             git_inspector=git_inspector,
             test_runner=test_runner,
+            trace_dir=trace_dir,
         )
 
         if show_progress:
@@ -127,83 +131,114 @@ def format_regression_free(metrics: Dict[str, Any]) -> str:
 
 
 def warn_if_mock(model: IModelBackend) -> None:
-    if not hasattr(model, "base_url"):
+    if isinstance(model, HeuristicCodingModel):
         console.print(
             "[yellow]Model: offline heuristic mock. Its hard-coded rules only match the seeded train bugs, "
             "so these numbers say nothing about learning. Use --provider ollama for a real evaluation.[/]\n"
         )
 
 
-def run_held_out_comparison(benchmark_root: Path, model: IModelBackend, results_path: Path) -> None:
-    """Run three-way ablation on held-out tasks and present comparative metrics table."""
+def run_held_out_comparison(
+    benchmark_root: Path,
+    model: IModelBackend,
+    results_path: Path,
+    trace_dir: Optional[Path] = None,
+    trials: int = 1,
+) -> None:
+    """Run the three-way ablation on held-out tasks `trials` times and report pooled metrics."""
     train_files = load_task_split(benchmark_root, "train")
     held_out_files = load_task_split(benchmark_root, "held_out")
     if not held_out_files or not train_files:
         console.print("[red]split.json must list both train and held-out tasks![/]")
         return
 
+    trials = max(1, trials)
     console.print(Panel("[bold green]Evaluating Held-Out Benchmark Split across Ablation Conditions[/]"))
-    console.print(f"Train tasks: {len(train_files)} | Held-out tasks: {len(held_out_files)}\n")
+    console.print(f"Train tasks: {len(train_files)} | Held-out tasks: {len(held_out_files)} | Trials: {trials}\n")
     warn_if_mock(model)
 
-    # Condition A: Zero-Shot Baseline (No Memory, 1 Attempt). Nothing is persisted, so no task
-    # can learn from an earlier held-out task.
-    console.print("[cyan][1/3] Running Zero-Shot Baseline (No Memory, 1 Attempt)...[/]")
-    res_a = run_tasks(held_out_files, model, InMemoryMemoryStore(), max_attempts=1, persist_episodes=False)
-    metrics_a = BenchmarkMetricsCalculator.calculate_metrics(res_a)
+    names = {
+        "A": "Zero-Shot (No Memory, 1 Attempt)",
+        "B": "Feedback Loop (No Memory, 3 Attempts)",
+        "C": "Train-Split Memory + Feedback (3 Attempts)",
+    }
+    runs: Dict[str, List[List[TaskResult]]] = {cond_id: [] for cond_id in names}
+    learned_episodes: List[int] = []
 
-    # Condition B: Multi-Attempt with Feedback (No Memory, 3 Attempts)
-    console.print("[cyan][2/3] Running Multi-Attempt with Retry Feedback (No Memory, 3 Attempts)...[/]")
-    res_b = run_tasks(held_out_files, model, InMemoryMemoryStore(), max_attempts=3, persist_episodes=False)
-    metrics_b = BenchmarkMetricsCalculator.calculate_metrics(res_b)
+    for trial in range(1, trials + 1):
+        console.print(f"[bold]Trial {trial}/{trials}[/]")
+        # A: zero-shot baseline. Nothing is persisted, so no task can learn from an earlier held-out task.
+        console.print("[cyan]  A: zero-shot (no memory, 1 attempt)...[/]")
+        runs["A"].append(run_tasks(
+            held_out_files, model, InMemoryMemoryStore(), max_attempts=1, persist_episodes=False, trace_dir=trace_dir
+        ))
 
-    # Condition C: memory built from the train split only, then frozen while evaluating held-out tasks.
-    # Reusing an old memory DB would leak held-out solutions from earlier runs into the "learning" score.
-    console.print("[cyan][3/3] Learning on train split, then evaluating held-out tasks with frozen memory...[/]")
-    learned_memory = InMemoryMemoryStore()
-    run_tasks(train_files, model, learned_memory, persist_episodes=True)
-    learned_episodes = len(learned_memory.get_accepted_episodes())
-    res_c = run_tasks(held_out_files, model, learned_memory, max_attempts=3, persist_episodes=False)
-    metrics_c = BenchmarkMetricsCalculator.calculate_metrics(res_c)
+        console.print("[cyan]  B: retry feedback (no memory, 3 attempts)...[/]")
+        runs["B"].append(run_tasks(
+            held_out_files, model, InMemoryMemoryStore(), max_attempts=3, persist_episodes=False, trace_dir=trace_dir
+        ))
 
-    conditions = [
-        ("A", "Zero-Shot (No Memory, 1 Attempt)", metrics_a),
-        ("B", "Feedback Loop (No Memory, 3 Attempts)", metrics_b),
-        ("C", "Train-Split Memory + Feedback (3 Attempts)", metrics_c),
-    ]
+        # C: memory built from the train split only, then frozen while evaluating held-out tasks.
+        # Reusing an old memory DB would leak held-out solutions from earlier runs into the "learning" score.
+        console.print("[cyan]  C: learning on train split, then held-out with frozen memory...[/]")
+        learned_memory = InMemoryMemoryStore()
+        run_tasks(train_files, model, learned_memory, persist_episodes=True, trace_dir=trace_dir)
+        learned_episodes.append(len(learned_memory.get_accepted_episodes()))
+        runs["C"].append(run_tasks(
+            held_out_files, model, learned_memory, max_attempts=3, persist_episodes=False, trace_dir=trace_dir
+        ))
+
+    # Pooled metrics over every trial, plus the spread of the per-trial resolution rates
+    pooled = {
+        cond_id: BenchmarkMetricsCalculator.calculate_metrics([res for trial in trial_runs for res in trial])
+        for cond_id, trial_runs in runs.items()
+    }
+    per_trial = {
+        cond_id: [BenchmarkMetricsCalculator.calculate_metrics(trial)["resolution_rate_percent"] for trial in trial_runs]
+        for cond_id, trial_runs in runs.items()
+    }
+
+    def format_rate(cond_id: str) -> str:
+        rate = f"{pooled[cond_id]['resolution_rate_percent']}%"
+        return rate if trials == 1 else f"{rate} ± {statistics.stdev(per_trial[cond_id]):.1f}"
 
     table = Table(title="EvoAgent Held-Out Benchmark: Self-Learning Ablation Table")
     table.add_column("Evaluation Configuration", style="cyan")
     table.add_column("Tasks", justify="center")
-    table.add_column("Resolution Rate", style="bold yellow", justify="center")
+    table.add_column("Resolution Rate" if trials == 1 else "Resolution (mean ± sd)", style="bold yellow", justify="center")
     table.add_column("Regression-Free", justify="center")
     table.add_column("Avg Attempts", justify="center")
     table.add_column("Delta vs A", style="bold green", justify="center")
 
-    base_rate = metrics_a["resolution_rate_percent"]
-    for cond_id, name, metrics in conditions:
+    base_rate = pooled["A"]["resolution_rate_percent"]
+    for cond_id, name in names.items():
+        metrics = pooled[cond_id]
         delta = metrics["resolution_rate_percent"] - base_rate
         table.add_row(
             f"{cond_id}: {name}",
-            str(metrics["total_tasks"]),
-            f"{metrics['resolution_rate_percent']}%",
+            str(len(held_out_files)) if trials == 1 else f"{len(held_out_files)} x {trials}",
+            format_rate(cond_id),
             format_regression_free(metrics),
             str(metrics["average_attempts_per_task"]),
             "Baseline" if cond_id == "A" else f"{delta:+.1f} pts",
         )
-
     console.print("\n", table)
-    memory_effect = metrics_c["resolution_rate_percent"] - metrics_b["resolution_rate_percent"]
+
+    # Paired B vs C comparison per (trial, task): only tasks solved by exactly one of them count
+    paired = [(b.is_successful, c.is_successful) for tb, tc in zip(runs["B"], runs["C"]) for b, c in zip(tb, tc)]
+    b_only = sum(1 for b, c in paired if b and not c)
+    c_only = sum(1 for b, c in paired if c and not b)
+    p_value = mcnemar_exact_p(b_only, c_only)
+    memory_effect = pooled["C"]["resolution_rate_percent"] - pooled["B"]["resolution_rate_percent"]
     console.print(
-        f"Memory effect (C - B): [bold]{memory_effect:+.1f} pts[/] | "
-        f"Verified train episodes available to C: {learned_episodes}"
+        f"Memory effect (C - B): [bold]{memory_effect:+.1f} pts[/] | solved only by C: {c_only}, "
+        f"only by B: {b_only} | exact McNemar p = {p_value:.3f}"
     )
-    if learned_episodes == 0:
+    console.print(f"Verified train episodes available to C: {statistics.fmean(learned_episodes):.1f} per trial")
+    if not any(learned_episodes):
         console.print("[yellow]No train task was solved, so condition C had nothing to retrieve.[/]")
-    console.print(
-        f"[dim]With {len(held_out_files)} held-out tasks each task moves the rate by "
-        f"{100 / len(held_out_files):.0f} pts; differences this size are not statistically meaningful.[/]"
-    )
+    if p_value >= 0.05:
+        console.print("[dim]Not statistically significant (p >= 0.05). Add trials or held-out tasks before claiming an effect.[/]")
 
     results_path.parent.mkdir(parents=True, exist_ok=True)
     results_path.write_text(
@@ -211,23 +246,28 @@ def run_held_out_comparison(benchmark_root: Path, model: IModelBackend, results_
             {
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "model": getattr(model, "model_name", type(model).__name__),
+                "trials": trials,
                 "train_tasks": [load_task(f).task_id for f in train_files],
                 "held_out_tasks": [load_task(f).task_id for f in held_out_files],
-                "learned_episodes": learned_episodes,
+                "learned_episodes_per_trial": learned_episodes,
                 "memory_effect_points": round(memory_effect, 2),
+                "paired_b_vs_c": {"solved_only_by_b": b_only, "solved_only_by_c": c_only, "mcnemar_p": round(p_value, 4)},
                 "conditions": [
                     {
                         "id": cond_id,
                         "name": name,
-                        "total_tasks": metrics["total_tasks"],
-                        "resolution_rate_percent": metrics["resolution_rate_percent"],
+                        "total_tasks": len(held_out_files),
+                        "resolution_rate_percent": pooled[cond_id]["resolution_rate_percent"],
+                        "resolution_rate_per_trial": per_trial[cond_id],
                         "regression_free_rate_percent": (
-                            metrics["regression_free_rate_percent"] if metrics["targeted_pass_candidates"] else None
+                            pooled[cond_id]["regression_free_rate_percent"]
+                            if pooled[cond_id]["targeted_pass_candidates"]
+                            else None
                         ),
-                        "average_attempts_per_task": metrics["average_attempts_per_task"],
-                        "average_duration_seconds": metrics["average_duration_seconds"],
+                        "average_attempts_per_task": pooled[cond_id]["average_attempts_per_task"],
+                        "average_duration_seconds": pooled[cond_id]["average_duration_seconds"],
                     }
-                    for cond_id, name, metrics in conditions
+                    for cond_id, name in names.items()
                 ],
             },
             indent=2,
@@ -237,7 +277,13 @@ def run_held_out_comparison(benchmark_root: Path, model: IModelBackend, results_
     console.print(f"Results written to {results_path.as_posix()}")
 
 
-def run_benchmark_suite(benchmark_root: Path, memory_db_path: Path, model: IModelBackend, split: str = "all") -> None:
+def run_benchmark_suite(
+    benchmark_root: Path,
+    memory_db_path: Path,
+    model: IModelBackend,
+    split: str = "all",
+    trace_dir: Optional[Path] = None,
+) -> None:
     """Discover and execute benchmark tasks for given split."""
     task_files = load_task_split(benchmark_root, split)
     if not task_files:
@@ -247,7 +293,7 @@ def run_benchmark_suite(benchmark_root: Path, memory_db_path: Path, model: IMode
     console.print(Panel(f"[bold green]Starting EvoAgent Benchmark Suite [{split}]: {len(task_files)} task(s) found[/]"))
     warn_if_mock(model)
 
-    results = run_tasks(task_files, model, SQLiteMemoryStore(memory_db_path), show_progress=True)
+    results = run_tasks(task_files, model, SQLiteMemoryStore(memory_db_path), show_progress=True, trace_dir=trace_dir)
     metrics = BenchmarkMetricsCalculator.calculate_metrics(results)
 
     table = Table(title=f"EvoAgent Benchmark Performance Summary [{split.upper()}]")
@@ -276,13 +322,22 @@ if __name__ == "__main__":
     )
     parser.add_argument("--model", default=settings.model_name, help="Model name for LLM providers")
     parser.add_argument("--base-url", default=settings.api_base_url, help="OpenAI-compatible endpoint")
+    parser.add_argument("--trials", type=int, default=1, help="Repeat the ablation N times (LLMs are nondeterministic)")
+    parser.add_argument(
+        "--trace-dir",
+        default=str(Path(__file__).parent.parent / settings.trace_dir),
+        help="Directory for per-attempt JSON traces; pass an empty string to disable",
+    )
     args = parser.parse_args()
 
     suite_dir = Path(__file__).parent
     data_dir = Path(__file__).parent.parent / "data"
+    traces = Path(args.trace_dir) if args.trace_dir else None
     model_backend = create_model_backend(args.provider, args.model, args.base_url, settings.api_key)
 
     if args.eval_comparison:
-        run_held_out_comparison(suite_dir, model_backend, data_dir / "ablation_results.json")
+        run_held_out_comparison(
+            suite_dir, model_backend, data_dir / "ablation_results.json", trace_dir=traces, trials=args.trials
+        )
     else:
-        run_benchmark_suite(suite_dir, data_dir / "benchmark_memory.db", model_backend, split=args.split)
+        run_benchmark_suite(suite_dir, data_dir / "benchmark_memory.db", model_backend, split=args.split, trace_dir=traces)

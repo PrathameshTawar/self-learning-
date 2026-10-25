@@ -46,7 +46,7 @@ graph TD
 3. **The sandbox runs in throwaway copies**: Tasks execute inside isolated temporary directories (`tempfile.TemporaryDirectory`). Accepted patches and failed attempts never pollute or corrupt the original benchmark or host repository.
 4. **Reliable patch format for small models**: Prefers exact `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` blocks. A SEARCH must match whole lines in exactly one place; ambiguous or missing matches are rejected and fed back to the next attempt. Unified diffs are applied hunk by hunk using their context lines.
 5. **Evidence-based learning**: Memory is built from the train split only and frozen while the held-out split (`benchmarks/split.json`) is evaluated, so a task can never retrieve its own solution. Strategy champions are promoted on held-out fitness, not the score they were selected with.
-6. **Traceable telemetry**: Every episode records the strategy ID, failure signature, patch, model hypothesis, outcome, and run telemetry (duration, attempts, patch validity, regression results). Prompts and individual tool calls are not stored yet.
+6. **Traceable telemetry**: Every episode records the strategy ID, failure signature, patch, model hypothesis, outcome, and run telemetry (duration, attempts, patch validity, regression results). Every run also writes a JSON trace to `logs/traces/` with each attempt's full prompt, raw model output, patch, evaluation, and the feedback given to the next attempt. Prompts are deterministic: per-run noise such as pytest timings is stripped.
 
 ---
 
@@ -56,7 +56,7 @@ graph TD
 |---|---|---|---|
 | **Layer A** | **Episodic Memory** | Stores failure signatures, root causes, SEARCH/REPLACE patches, and verified outcomes. Injects proven lessons into future planning sessions via Okapi BM25 ranking. | **Implemented & Tested** |
 | **Layer B** | **Strategy Optimization** | Genetic evolution of hyperparameters (`prompt_style`, `retrieval_policy`, `retrieval_top_k`, `max_repair_attempts`, `max_patch_lines`, `temperature`, `enable_multi_file_context`), evaluated against frozen memory on the train split and promoted only if held-out fitness beats the active strategy by a fixed margin. | **Implemented & Tested** (no LLM results yet) |
-| **Layer C** | **Model Adaptation** | Curates accepted vs. rejected repair pairs for Supervised Fine-Tuning (SFT) and Direct Preference Optimization (DPO) using LoRA/PEFT when sufficient verified episodes accumulate. | Foundation ready (`export-dataset`) |
+| **Layer C** | **Model Adaptation** | Builds SFT examples from evaluator-accepted attempts (with the exact prompt the model saw) and DPO pairs from accepted vs. rejected outputs for identical prompts, using run traces. Splits are assigned per task, so no task appears in both train and test. | Dataset export ready (`export-dataset`); LoRA training not validated yet |
 
 ---
 
@@ -91,6 +91,7 @@ graph TD
 |  - Strict environment variable allowlist (blocks host secret leaking)             |
 |  - Argument vector execution without shell=True                                   |
 |  - POSIX resource boundaries on CPU/memory where supported                        |
+|  - Timeouts kill the command's whole process tree                                 |
 |  - No network or filesystem isolation: run untrusted models inside a container    |
 +-----------------------------------------------------------------------------------+
                                     |
@@ -162,8 +163,8 @@ python benchmarks/run_benchmarks.py --split held_out
 ### Run 3-Way Self-Learning Ablation Table
 Evaluate held-out tasks under 3 controlled conditions to measure learning transfer:
 ```powershell
-# With a real model (recommended)
-python benchmarks/run_benchmarks.py --eval-comparison --provider ollama --model qwen2.5-coder:1.5b
+# With a real model, repeated 5 times (recommended)
+python benchmarks/run_benchmarks.py --eval-comparison --provider ollama --model qwen2.5-coder:1.5b --trials 5
 
 # With the offline heuristic mock (pipeline check only)
 python benchmarks/run_benchmarks.py --eval-comparison
@@ -174,7 +175,20 @@ Outputs the comparative ablation table and writes `data/ablation_results.json` (
 - **Condition B (Feedback Loop)**: No memory, 3 attempts with retry feedback.
 - **Condition C (Train-Split Memory)**: Memory learned on the train split only, frozen during held-out evaluation, plus retry feedback.
 
-The memory effect is **C - B**; A to B isolates retry feedback.
+The memory effect is **C - B**; A to B isolates retry feedback. With `--trials N` the whole protocol runs N times and the table shows mean ± sd. B and C are compared per task and trial with an exact McNemar test, and the runner says when the difference is not statistically significant. Per-attempt traces go to `logs/traces/` (`--trace-dir ""` disables them).
+
+### Benchmark Design
+Every held-out task has a train task with the same defect class but different code, so episodic memory has something to transfer:
+
+| Defect class | Train task | Held-out task |
+|---|---|---|
+| empty-collection-guard | `bug-001-parser` | `bug-009-latest-event` |
+| none-guard | `bug-002-multifile` | `bug-004-dict-merge` |
+| off-by-one-bound | `bug-003-binary-search` | `bug-010-moving-average` |
+| boundary-initialization | `bug-007-max-subarray` | `bug-005-levenshtein` |
+| inverted-comparison | `bug-008-cache-ttl` | `bug-006-rate-limiter` |
+
+Issue texts describe symptoms only, and task sources contain no hints about the fix.
 
 ---
 
@@ -184,11 +198,11 @@ Measured with the offline heuristic mock (`python benchmarks/run_benchmarks.py -
 
 | Condition | Held-out resolution |
 |---|---|
-| A: Zero-shot, no memory | 0% (0/3) |
-| B: Retry feedback, no memory | 0% (0/3) |
-| C: Train-split memory + feedback | 0% (0/3) |
+| A: Zero-shot, no memory | 0% (0/5) |
+| B: Retry feedback, no memory | 0% (0/5) |
+| C: Train-split memory + feedback | 0% (0/5) |
 
-This is the expected result for the mock: its hard-coded rules match only the seeded train bugs (it solves 2 of 3), so it cannot transfer anything. **No LLM results have been published yet.** Run the command above with `--provider ollama` to produce them. With 3 held-out tasks every task moves the rate by 33 points, so a meaningful comparison needs a much larger held-out split (30+ tasks) and repeated runs.
+This is the expected result for the mock: its hard-coded rules match only two seeded train bugs (it solves 2 of 5), so it cannot transfer anything. A positive-control test (`tests/e2e/test_ablation_runner.py`) checks that the runner does report a memory effect when one exists. **No LLM results have been published yet.** Run the command above with `--provider ollama --trials 5` to produce them. With 5 held-out tasks every task moves the rate by 20 points, so a convincing result needs a larger held-out split (30+ tasks) as well as repeated trials.
 
 ---
 
@@ -269,7 +283,11 @@ ruff check src tests benchmarks
 │       ├── bug_003_binary_search/# [train] Off-by-one boundary index defect
 │       ├── bug_004_dict_merge/   # [held-out] NoneType attribute error in dict merge
 │       ├── bug_005_levenshtein/  # [held-out] Dynamic programming boundary condition
-│       └── bug_006_rate_limiter/ # [held-out] Sliding window filter inequality bug
+│       ├── bug_006_rate_limiter/ # [held-out] Sliding window filter inequality bug
+│       ├── bug_007_max_subarray/ # [train] Accumulator initialized to the wrong value
+│       ├── bug_008_cache_ttl/    # [train] Inverted freshness comparison
+│       ├── bug_009_latest_event/ # [held-out] IndexError on empty event list
+│       └── bug_010_moving_average/# [held-out] Off-by-one window range
 └── tests/                        # Comprehensive unit & E2E tests
     ├── unit/
     └── e2e/

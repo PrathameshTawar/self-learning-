@@ -5,9 +5,10 @@ Local subprocess runner enforcing timeouts, environment allowlisting, argument l
 import os
 from pathlib import Path
 import shlex
+import signal
 import subprocess
 import time
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Sequence, Union
 from evoagent.sandbox.interface import ExecutionOutcome, ISandboxRunner
 
 # Strict environment variable allowlist: only essential OS and Python runtime keys are passed
@@ -39,7 +40,7 @@ MAX_OUTPUT_BYTES = 500_000  # 500 KB output capture limit to avoid OOM
 
 
 def _set_posix_resource_limits(max_memory_mb: int = 2048, max_cpu_seconds: int = 60) -> None:
-    """Apply POSIX resource bounds (RLIMIT_AS, RLIMIT_CPU, RLIMIT_NPROC) if supported."""
+    """Apply POSIX resource bounds (RLIMIT_AS, RLIMIT_CPU) if supported."""
     try:
         import resource
         bytes_limit = max_memory_mb * 1024 * 1024
@@ -55,7 +56,8 @@ class LocalSubprocessSandbox(ISandboxRunner):
     - Strict environment variable allowlisting (blocks secret leaking)
     - Shell-free argument list execution (prevents shell injection)
     - POSIX resource boundaries on CPU/memory where supported
-    - Strict execution timeouts and output buffer truncation
+    - Strict execution timeouts that kill every process the command spawned
+    - Output buffer truncation
     """
 
     def __init__(self, use_allowlist_env: bool = True, max_memory_mb: int = 2048) -> None:
@@ -85,6 +87,74 @@ class LocalSubprocessSandbox(ISandboxRunner):
         except Exception:
             return [t.strip('"\'') for t in command.split()]
 
+    @staticmethod
+    def _kill_process_tree(process: subprocess.Popen) -> None:
+        """Kill the command and everything it spawned; it runs in its own process group."""
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], capture_output=True)
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        process.kill()
+
+    def _run(
+        self,
+        args: Union[str, Sequence[str]],
+        cwd: Path,
+        timeout_seconds: int,
+        env: Dict[str, str],
+        shell: bool,
+        preexec: Optional[Callable[[], None]],
+    ) -> ExecutionOutcome:
+        """Run one command; on timeout kill its whole process tree, not just the direct child."""
+        start_time = time.perf_counter()
+        group_kwargs = (
+            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+            if os.name == "nt"
+            else {"start_new_session": True, "preexec_fn": preexec}
+        )
+        with subprocess.Popen(
+            args,
+            cwd=str(cwd),
+            shell=shell,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+            env=env,
+            **group_kwargs,
+        ) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_seconds)
+                timed_out = False
+            except subprocess.TimeoutExpired:
+                self._kill_process_tree(process)
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # A detached descendant still holds the pipes; give up on the remaining output
+                    stdout, stderr = "", ""
+                timed_out = True
+
+        duration = time.perf_counter() - start_time
+        if timed_out:
+            return ExecutionOutcome(
+                exit_code=124,
+                stdout=stdout[:MAX_OUTPUT_BYTES],
+                stderr=f"Execution timed out after {timeout_seconds}s.\n{stderr[:MAX_OUTPUT_BYTES]}",
+                duration_seconds=duration,
+                timed_out=True,
+            )
+        return ExecutionOutcome(
+            exit_code=process.returncode,
+            stdout=stdout[:MAX_OUTPUT_BYTES],
+            stderr=stderr[:MAX_OUTPUT_BYTES],
+            duration_seconds=duration,
+            timed_out=False,
+        )
+
     def execute_command(
         self,
         command: str,
@@ -106,63 +176,14 @@ class LocalSubprocessSandbox(ISandboxRunner):
                 )
 
         try:
-            process = subprocess.run(
-                cmd_args,
-                cwd=str(cwd),
-                shell=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                env=clean_env,
-                preexec_fn=preexec,
-            )
-            duration = time.perf_counter() - start_time
-
-            stdout = process.stdout[:MAX_OUTPUT_BYTES]
-            stderr = process.stderr[:MAX_OUTPUT_BYTES]
-
-            return ExecutionOutcome(
-                exit_code=process.returncode,
-                stdout=stdout,
-                stderr=stderr,
-                duration_seconds=duration,
-                timed_out=False,
-            )
-
-        except subprocess.TimeoutExpired as exc:
-            duration = time.perf_counter() - start_time
-            stdout_str = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout.decode("utf-8", errors="replace") if exc.stdout else "")
-            stderr_str = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr.decode("utf-8", errors="replace") if exc.stderr else "")
-            return ExecutionOutcome(
-                exit_code=124,
-                stdout=stdout_str[:MAX_OUTPUT_BYTES],
-                stderr=f"Execution timed out after {timeout_seconds}s.\n{stderr_str[:MAX_OUTPUT_BYTES]}",
-                duration_seconds=duration,
-                timed_out=True,
-            )
+            return self._run(cmd_args, cwd, timeout_seconds, clean_env, shell=False, preexec=preexec)
 
         except (FileNotFoundError, PermissionError) as launch_exc:
             error: Exception = launch_exc
             # Fallback for Windows executables requiring shell resolution
             if os.name == "nt":
                 try:
-                    process = subprocess.run(
-                        command,
-                        cwd=str(cwd),
-                        shell=True,
-                        capture_output=True,
-                        text=True,
-                        timeout=timeout_seconds,
-                        env=clean_env,
-                    )
-                    duration = time.perf_counter() - start_time
-                    return ExecutionOutcome(
-                        exit_code=process.returncode,
-                        stdout=process.stdout[:MAX_OUTPUT_BYTES],
-                        stderr=process.stderr[:MAX_OUTPUT_BYTES],
-                        duration_seconds=duration,
-                        timed_out=False,
-                    )
+                    return self._run(command, cwd, timeout_seconds, clean_env, shell=True, preexec=None)
                 except Exception as inner_exc:
                     error = inner_exc
 

@@ -9,6 +9,7 @@
   "metadata": {
     "target_file": "validator.py",
     "calling_file": "service.py",
-    "failure_type": "AttributeError"
+    "failure_type": "AttributeError",
+    "defect_class": "none-guard"
   }
 }

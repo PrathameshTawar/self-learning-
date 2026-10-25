@@ -2,8 +2,9 @@
 Unit tests for TaskState and TaskStateMachine budget and lifecycle invariants.
 """
 
+import json
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from unittest.mock import MagicMock
 from evoagent.domain.models import (
     ExecutionBudget,
@@ -103,7 +104,7 @@ class RecordingModel(IModelBackend):
     def generate_repair_proposal(self, prompt: ModelPrompt) -> ModelResponse:
         self.prompts.append(prompt)
         diff = self.diffs[min(len(self.prompts), len(self.diffs)) - 1]
-        return ModelResponse(hypothesis="scripted", proposed_diff=diff)
+        return ModelResponse(hypothesis="scripted", proposed_diff=diff, explanation=f"Reasoning.\n{diff}")
 
 
 GOOD_FIX = (
@@ -116,7 +117,9 @@ GOOD_FIX = (
 WRONG_FIX = GOOD_FIX.replace("else ''", "else None")
 
 
-def _real_state_machine(repo: Path, model: IModelBackend, store: InMemoryMemoryStore) -> TaskStateMachine:
+def _real_state_machine(
+    repo: Path, model: IModelBackend, store: InMemoryMemoryStore, trace_dir: Optional[Path] = None
+) -> TaskStateMachine:
     sandbox = LocalSubprocessSandbox()
     test_runner = TestRunnerTool(sandbox)
     patch_tool = PatchTool(root_path=repo)
@@ -128,6 +131,7 @@ def _real_state_machine(repo: Path, model: IModelBackend, store: InMemoryMemoryS
         patch_tool=patch_tool,
         git_inspector=GitInspector(sandbox),
         test_runner=test_runner,
+        trace_dir=trace_dir,
     )
 
 
@@ -212,3 +216,25 @@ def test_episode_records_run_telemetry(temp_repo: Path):
     assert telemetry["targeted_pass_candidates"] == 1
     assert telemetry["regression_free_candidates"] == 1
     assert telemetry["duration_seconds"] > 0
+
+
+def test_trace_records_model_input_output_and_feedback(temp_repo: Path, tmp_path: Path):
+    trace_dir = tmp_path / "traces"
+    model = RecordingModel([WRONG_FIX, GOOD_FIX])
+    _real_state_machine(temp_repo, model, InMemoryMemoryStore(), trace_dir).execute_task(_parser_task(temp_repo))
+
+    trace_files = list(trace_dir.glob("parser-empty-input-*.json"))
+    assert len(trace_files) == 1
+    trace = json.loads(trace_files[0].read_text(encoding="utf-8"))
+    assert trace["final_state"] == "COMPLETED"
+
+    first, second = trace["attempts"]
+    assert first["state"] == "RETRYABLE_FAILURE"
+    assert first["patch"] == WRONG_FIX
+    assert "AssertionError" in first["feedback_for_next_attempt"]
+    # The next prompt carries exactly the recorded feedback
+    assert second["prompt"]["previous_attempt_error"] == first["feedback_for_next_attempt"]
+    assert second["state"] == "SUCCEEDED"
+    assert second["model_output"] == f"Reasoning.\n{GOOD_FIX}"
+    assert second["evaluation"]["is_accepted"] is True
+    assert second["feedback_for_next_attempt"] is None

@@ -1,0 +1,13 @@
+{
+  "task_id": "bug-007-max-subarray",
+  "repo_dir": "code",
+  "issue_description": "max_subarray_sum returns 0 for lists that contain only negative numbers",
+  "targeted_test": "tests/test_subarray.py -k test_all_negative_values",
+  "regression_test": "tests/test_subarray.py",
+  "max_attempts": 3,
+  "timeout_seconds": 30,
+  "metadata": {
+    "target_file": "subarray.py",
+    "defect_class": "boundary-initialization"
+  }
+}

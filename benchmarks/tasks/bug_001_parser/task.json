@@ -8,6 +8,7 @@
   "timeout_seconds": 30,
   "metadata": {
     "target_file": "parser.py",
-    "failure_type": "IndexError"
+    "failure_type": "IndexError",
+    "defect_class": "empty-collection-guard"
   }
 }
