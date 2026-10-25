@@ -55,9 +55,9 @@ graph TD
 
 | Layer | Type | Mechanism | Status |
 |---|---|---|---|
-| **Layer A** | **Episodic Memory** | Stores failure signatures, root causes, SEARCH/REPLACE patches, and verified outcomes. Injects proven lessons into future planning sessions via Okapi BM25 ranking. | **Implemented & Tested** |
+| **Layer A** | **Episodic Memory** | Stores failure signatures, root causes, SEARCH/REPLACE patches, and verified outcomes. Injects only verified lessons into future planning sessions via Okapi BM25 ranking. | **Implemented & Tested**; no measured benefit yet (see Results) |
 | **Layer B** | **Strategy Optimization** | Genetic evolution of hyperparameters (`prompt_style`, `retrieval_policy`, `retrieval_top_k`, `max_repair_attempts`, `max_patch_lines`, `temperature`, `enable_multi_file_context`), evaluated against frozen memory on the train split and promoted only if held-out fitness beats the active strategy by a fixed margin. | **Implemented & Tested** (no LLM results yet) |
-| **Layer C** | **Model Adaptation** | Builds SFT examples from evaluator-accepted attempts (with the exact prompt the model saw) and DPO pairs from accepted vs. rejected outputs for identical prompts, using run traces. Splits are assigned per task, so no task appears in both train and test. | Dataset export ready (`export-dataset`); LoRA training not validated yet |
+| **Layer C** | **Model Adaptation** | Builds SFT examples from evaluator-accepted attempts (with the exact prompt the model saw) and DPO pairs from accepted vs. rejected outputs for identical prompts, using run traces. Splits are assigned per task, so no task appears in both train and test, and benchmark held-out tasks are excluded by default. | Dataset export ready (`export-dataset`); LoRA training not validated yet |
 
 ---
 
@@ -214,15 +214,40 @@ python benchmarks/run_benchmarks.py --eval-comparison --sandbox docker   # or EV
 
 ## Results
 
-Measured with the offline heuristic mock (`python benchmarks/run_benchmarks.py --eval-comparison`):
+### Real model: Qwen2.5-3B-Instruct on CPU
+Measured with `python benchmarks/run_benchmarks.py --eval-comparison --provider openai_compatible --trials 3` on the bundled 5 train / 5 held-out split, with file hints on.
 
-| Condition | Held-out resolution |
+- **Model and runtime:** `ai/qwen2.5:3B-Q4_K_M` (GGUF from Docker Hub's model catalog), served by llama.cpp (`llama-cpp-python` 0.3.16) on 4 CPU cores at temperature 0.2.
+- **Not the recommended model:** the recommended `qwen2.5-coder:1.5b` could not be downloaded in the environment used.
+
+| Condition | Held-out resolution (mean ± sd) | Per trial | Avg attempts |
+|---|---|---|---|
+| A: Zero-shot, no memory | 26.7% ± 23.1 | 40% / 0% / 40% | 1.0 |
+| B: Retry feedback, no memory | 26.7% ± 11.5 | 20% / 40% / 20% | 2.6 |
+| C: Train-split memory + feedback | 20.0% ± 20.0 | 40% / 20% / 0% | 2.7 |
+
+**Memory effect (C - B): -6.7 points.** Pairing B and C task by task and trial by trial, 2 tasks were solved only by C and 3 only by B; the exact McNemar p-value is 1.0. **There is no evidence that memory or retry feedback helps this model on this benchmark.** Raw numbers and two example traces are in `benchmarks/results/qwen2.5-3b-cpu/`.
+
+**What the traces show** (60 runs, 128 attempts):
+
+| Attempt outcome | Share |
 |---|---|
-| A: Zero-shot, no memory | 0% (0/5) |
-| B: Retry feedback, no memory | 0% (0/5) |
-| C: Train-split memory + feedback | 0% (0/5) |
+| SEARCH text not in the file | 27% |
+| Targeted test still fails | 27% |
+| No patch extracted | 21% |
+| Accepted | 14% |
+| Patch broke syntax | 6% |
+| Fixed the target, broke the regression suite | 5% |
 
-This is the expected result for the mock: its hard-coded rules match only two seeded train bugs (it solves 2 of 5), so it cannot transfer anything. A positive-control test (`tests/e2e/test_ablation_runner.py`) checks that the runner does report a memory effect when one exists. **No LLM results have been published yet.** Run the command above with `--provider ollama --trials 5` to produce them. With 5 held-out tasks every task moves the rate by 20 points, so a convincing result needs a larger held-out split (30+ tasks) as well as repeated trials.
+- **The bottleneck is producing a patch at all.** About half of all attempts never applied (no patch extracted, or SEARCH text not in the file).
+- **Memory sometimes helped.** When a held-out task's same-class train task had been solved, retrieval usually ranked its lesson first. In trial 1 this preceded fixes for `bug-004` and `bug-009` (see `trace_memory_guided_success_bug-004.json`), but trials 2 and 3 did not repeat it.
+- **Memory also added noise.** Retrieval also returned unrelated lessons, and "caution" entries from failed train runs that contain no fix. Since this run, only verified lessons are retrieved.
+- **The training data is real but small.** These traces yield 7 SFT rows from 4 train tasks and 1 DPO pair, with benchmark held-out tasks excluded. Examples are 562 to 1060 tokens long, so none fits the old 512-token training limit.
+
+With 5 held-out tasks, a single task moves the rate by 20 points. The next meaningful run is the 16-task QuixBugs held-out split with the coder model on a GPU, over several trials.
+
+### Offline mock (pipeline check)
+The heuristic mock scores 0/5 on held-out tasks in every condition. That is expected: its hard-coded rules only match two seeded train bugs. A positive-control test (`tests/e2e/test_ablation_runner.py`) checks that the runner does report a memory effect when one exists.
 
 ---
 

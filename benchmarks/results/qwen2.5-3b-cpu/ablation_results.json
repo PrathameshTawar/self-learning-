@@ -1,0 +1,108 @@
+{
+  "generated_at": "2026-10-25T06:42:01.781898+00:00",
+  "model": "qwen2.5-3b-instruct",
+  "trials": 3,
+  "file_hints": true,
+  "train_tasks": [
+    "bug-001-parser",
+    "bug-002-multifile",
+    "bug-003-binary-search",
+    "bug-007-max-subarray",
+    "bug-008-cache-ttl"
+  ],
+  "held_out_tasks": [
+    "bug-004-dict-merge",
+    "bug-005-levenshtein",
+    "bug-006-rate-limiter",
+    "bug-009-latest-event",
+    "bug-010-moving-average"
+  ],
+  "learned_episodes_per_trial": [
+    2,
+    4,
+    1
+  ],
+  "memory_effect_points": -6.67,
+  "paired_b_vs_c": {
+    "solved_only_by_b": 3,
+    "solved_only_by_c": 2,
+    "mcnemar_p": 1.0
+  },
+  "conditions": [
+    {
+      "id": "A",
+      "name": "Zero-Shot (No Memory, 1 Attempt)",
+      "total_tasks": 5,
+      "resolution_rate_percent": 26.67,
+      "resolution_rate_per_trial": [
+        40.0,
+        0.0,
+        40.0
+      ],
+      "solved_tasks_per_trial": [
+        [
+          "bug-004-dict-merge",
+          "bug-010-moving-average"
+        ],
+        [],
+        [
+          "bug-004-dict-merge",
+          "bug-010-moving-average"
+        ]
+      ],
+      "regression_free_rate_percent": 66.67,
+      "average_attempts_per_task": 1.0,
+      "average_duration_seconds": 24.28
+    },
+    {
+      "id": "B",
+      "name": "Feedback Loop (No Memory, 3 Attempts)",
+      "total_tasks": 5,
+      "resolution_rate_percent": 26.67,
+      "resolution_rate_per_trial": [
+        20.0,
+        40.0,
+        20.0
+      ],
+      "solved_tasks_per_trial": [
+        [
+          "bug-010-moving-average"
+        ],
+        [
+          "bug-009-latest-event",
+          "bug-010-moving-average"
+        ],
+        [
+          "bug-010-moving-average"
+        ]
+      ],
+      "regression_free_rate_percent": 100.0,
+      "average_attempts_per_task": 2.6,
+      "average_duration_seconds": 68.06
+    },
+    {
+      "id": "C",
+      "name": "Train-Split Memory + Feedback (3 Attempts)",
+      "total_tasks": 5,
+      "resolution_rate_percent": 20.0,
+      "resolution_rate_per_trial": [
+        40.0,
+        20.0,
+        0.0
+      ],
+      "solved_tasks_per_trial": [
+        [
+          "bug-004-dict-merge",
+          "bug-009-latest-event"
+        ],
+        [
+          "bug-010-moving-average"
+        ],
+        []
+      ],
+      "regression_free_rate_percent": 50.0,
+      "average_attempts_per_task": 2.73,
+      "average_duration_seconds": 83.76
+    }
+  ]
+}
