@@ -74,3 +74,16 @@ def test_export_keeps_each_task_in_a_single_split(tmp_path: Path):
         row = json.loads(line)
         splits_per_task.setdefault(row["task_id"], set()).add(row["split"])
     assert all(len(splits) == 1 for splits in splits_per_task.values())
+
+
+def test_export_leaves_out_benchmark_held_out_tasks(temp_repo: Path, tmp_path: Path):
+    trace_dir = tmp_path / "traces"
+    _run(temp_repo, trace_dir, [GOOD_FIX], attempts=1)
+    split_file = tmp_path / "split.json"
+    split_file.write_text(json.dumps({"train_tasks": [], "held_out_tasks": ["parser-empty-input"]}), encoding="utf-8")
+    curator = DatasetCurator(InMemoryMemoryStore())
+
+    held_out = curator.held_out_task_ids([split_file, tmp_path / "missing.json"])
+    assert held_out == {"parser-empty-input"}
+    assert curator.export_dataset_jsonl(tmp_path / "sft.jsonl", trace_dir=trace_dir) == 1
+    assert curator.export_dataset_jsonl(tmp_path / "sft.jsonl", trace_dir=trace_dir, exclude_tasks=held_out) == 0

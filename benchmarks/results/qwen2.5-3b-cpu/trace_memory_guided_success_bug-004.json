@@ -1,0 +1,43 @@
+{
+  "task_id": "bug-004-dict-merge",
+  "issue_description": "deep_merge_config raises AttributeError when overriding nested dictionary with None or primitive",
+  "strategy_id": "default",
+  "failure_signature": "AttributeError: 'NoneType' object has no attribute 'items'",
+  "final_state": "COMPLETED",
+  "duration_seconds": 33.66,
+  "attempts": [
+    {
+      "attempt_number": 1,
+      "state": "SUCCEEDED",
+      "prompt": {
+        "task_id": "bug-004-dict-merge",
+        "issue_description": "deep_merge_config raises AttributeError when overriding nested dictionary with None or primitive",
+        "failure_trace": "F                                                                        [100%]\n=================================== FAILURES ===================================\n______________________ test_deep_merge_with_none_override ______________________\ntests/test_merger.py:8: in test_deep_merge_with_none_override\n    merged = deep_merge_config(base, None)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nmerger.py:11: in deep_merge_config\n    for key, value in override.items():\n                      ^^^^^^^^^^^^^^\nE   AttributeError: 'NoneType' object has no attribute 'items'\n=========================== short test summary info ============================\nFAILED tests/test_merger.py::test_deep_merge_with_none_override - AttributeEr...\n1 failed, 2 deselected\n\n",
+        "target_file": "merger.py",
+        "file_content": "=== PRIMARY DEFECT FILE: merger.py ===\n1: def deep_merge_config(base, override):\n2:     \"\"\"\n3:     Recursively merges override dictionary into base dictionary.\n4:     Returns a newly merged dictionary.\n5:     \"\"\"\n6:     if base is None:\n7:         return override if isinstance(override, dict) else {}\n8: \n9:     result = dict(base)\n10: \n11:     for key, value in override.items():\n12:         if key in result and isinstance(result[key], dict) and isinstance(value, dict):\n13:             result[key] = deep_merge_config(result[key], value)\n14:         else:\n15:             result[key] = value\n16: \n17:     return result\n\n=== REFERENCED CROSS-FILE DEFINITIONS ===\n\n--- tests/test_merger.py (Symbol: test_deep_merge_with_none_override, Lines 5-9) ---\n5: def test_deep_merge_with_none_override():\n6:     # Targeted reproduction: override is None, which triggers AttributeError\n7:     base = {\"database\": {\"host\": \"localhost\", \"port\": 5432}}\n8:     merged = deep_merge_config(base, None)\n9:     assert merged == base",
+        "retrieved_lessons": [
+          "[Task bug-002-multifile (Resolved)]: Successfully resolved with hypothesis: 1. Hypothesis: The root cause of the AttributeError is that `normalize_and_validate` function attempts to call `.strip()` on a `NoneType` object when `raw_text` is `None`, which results in an error since `None` does not have a `.strip()` method.\n\n2. SEARCH/REPLACE block:. Addressed failure signature: AttributeError: 'NoneType' object has no attribute 'strip' (Fix applied: if raw_text is None or isinstance(raw_text, str) and raw_text == \"\": | return \"\" | else:)",
+          "[Task bug-001-parser (Resolved)]: Successfully resolved with hypothesis: 1. Hypothesis: The root cause of the IndexError is that an empty string or a whitespace-only string will result in `parts` being an empty list, which leads to the index error when trying to access `parts[0]`.\n2. SEARCH/REPLACE block:. Addressed failure signature: IndexError: list index out of range (Fix applied: if not parts:  # Check if parts is an empty list | return \"\" | else:)",
+          "[Task bug-003-binary-search (Caution)]: Past failed attempt warning - Failed to resolve bug after 3 attempts. Last failure signature: IndexError: list index out of range"
+        ],
+        "attempt_number": 1,
+        "previous_attempt_patch": null,
+        "previous_attempt_error": null,
+        "system_instruction": "Reasoning Mode: Minimal Diff. Keep changes concise, minimal, and surgical to resolve the failure.",
+        "temperature": null
+      },
+      "hypothesis": "1. Hypothesis: The root cause of the AttributeError is that `deep_merge_config` function attempts to call `.items()` on a `NoneType` object when `override` is `None`, which results in an error since `None` does not have a `.items()` method.\n\n2. SEARCH/REPLACE block:",
+      "model_output": "1. Hypothesis: The root cause of the AttributeError is that `deep_merge_config` function attempts to call `.items()` on a `NoneType` object when `override` is `None`, which results in an error since `None` does not have a `.items()` method.\n\n2. SEARCH/REPLACE block:\n<<<<<<< SEARCH\n    for key, value in override.items():\n=======\n    if override is None:\n        return result  # Exit early if override is None\n    for key, value in override.items():\n>>>>>>> REPLACE",
+      "patch": "<<<<<<< SEARCH\n    for key, value in override.items():\n=======\n    if override is None:\n        return result  # Exit early if override is None\n    for key, value in override.items():\n>>>>>>> REPLACE",
+      "evaluation": {
+        "targeted_tests_passed": true,
+        "regression_tests_passed": true,
+        "patch_syntactically_valid": true,
+        "is_accepted": true,
+        "score": 1.0,
+        "feedback": "Fix verified! Targeted test passed. All regression tests passed successfully."
+      },
+      "feedback_for_next_attempt": null
+    }
+  ]
+}

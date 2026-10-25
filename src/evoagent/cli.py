@@ -151,14 +151,22 @@ def memory_list(memory_db: str) -> None:
 @click.option("--output", "-o", default="data/curated_sft.jsonl", help="Output JSONL file path")
 @click.option("--memory-db", default="data/evoagent_memory.db", help="Path to SQLite memory file")
 @click.option("--trace-dir", default=str(settings.trace_dir), help="Run traces (preferred source of full prompts)")
-def export_dataset(output: str, memory_db: str, trace_dir: str) -> None:
+@click.option(
+    "--exclude-held-out",
+    multiple=True,
+    default=("benchmarks/split.json", "benchmarks/quixbugs/split.json"),
+    help="Benchmark split files whose held-out tasks are left out of the training data",
+)
+def export_dataset(output: str, memory_db: str, trace_dir: str, exclude_held_out: tuple) -> None:
     """Export verified repairs as an SFT dataset, plus DPO pairs built from traces."""
     curator = DatasetCurator(SQLiteMemoryStore(Path(memory_db)))
+    held_out = curator.held_out_task_ids(Path(f) for f in exclude_held_out if f)
     out_path = Path(output)
-    rows = curator.export_dataset_jsonl(out_path, trace_dir=Path(trace_dir))
+    rows = curator.export_dataset_jsonl(out_path, trace_dir=Path(trace_dir), exclude_tasks=held_out)
     dpo_path = out_path.with_name(f"{out_path.stem}_dpo.jsonl")
-    pairs = curator.export_dpo_jsonl(dpo_path, Path(trace_dir))
+    pairs = curator.export_dpo_jsonl(dpo_path, Path(trace_dir), exclude_tasks=held_out)
     console.print(f"[bold green]Exported {rows} SFT rows to {out_path} and {pairs} DPO pairs to {dpo_path}[/]")
+    console.print(f"Left out {len(held_out)} benchmark held-out task ids so they stay unseen.")
 
 
 @main.command()

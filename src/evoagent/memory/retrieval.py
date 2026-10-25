@@ -5,6 +5,7 @@ Supports configurable retrieval policies and top_k parameters from strategy chro
 
 import re
 from typing import List, Optional
+from evoagent.memory.bm25 import BM25Ranker
 from evoagent.memory.schemas import MemoryEpisodeRecord
 from evoagent.memory.store import IMemoryStore
 from evoagent.tools.patch_tools import SEARCH_REPLACE_BLOCK_RE
@@ -35,6 +36,7 @@ class ExperienceRetriever:
 
     def __init__(self, memory_store: IMemoryStore) -> None:
         self.memory_store = memory_store
+        self.ranker = BM25Ranker()
 
     def retrieve_relevant_lessons(
         self,
@@ -64,20 +66,11 @@ class ExperienceRetriever:
             # Standard signature match
             query = f"{failure_signature} {issue_description}".strip()
 
-        episodes = self.memory_store.find_by_signature(query, limit=max_results * 2)
-
-        lessons = []
-        for ep in episodes:
-            if ep.outcome == "accepted" and ep.lessons_learned:
-                lessons.append(
-                    f"[Task {ep.task_id} (Resolved)]: {ep.lessons_learned} (Fix applied: {summarize_fix(ep.applied_patch)})"
-                )
-            elif ep.outcome == "rejected" and ep.lessons_learned:
-                lessons.append(
-                    f"[Task {ep.task_id} (Caution)]: Past failed attempt warning - {ep.lessons_learned}"
-                )
-
-            if len(lessons) >= max_results:
-                break
-
-        return lessons
+        # Only verified repairs become lessons. A failed episode records no fix, only that it failed;
+        # in real runs those "caution" entries reached every prompt without adding information.
+        episodes = self.ranker.rank(query, self.memory_store.get_accepted_episodes(), limit=max_results)
+        return [
+            f"[Task {ep.task_id} (Resolved)]: {ep.lessons_learned} (Fix applied: {summarize_fix(ep.applied_patch)})"
+            for ep in episodes
+            if ep.lessons_learned
+        ]
