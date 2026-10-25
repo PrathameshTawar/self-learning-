@@ -126,3 +126,24 @@ def test_request_caps_output_tokens(monkeypatch):
 
     OpenAICompatibleModel(max_tokens=256).generate_repair_proposal(_prompt())
     assert captured["max_tokens"] == 256
+
+
+def test_no_api_key_sends_no_authorization_header(monkeypatch):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"choices": [{"message": {"content": TWO_BLOCK_RESPONSE}}]})
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        open_model.httpx,
+        "Client",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+    )
+
+    # The default EVOAGENT_API_KEY is empty, as for a local Ollama server
+    response = OpenAICompatibleModel(api_key="").generate_repair_proposal(_prompt())
+
+    assert "authorization" not in captured["headers"]
+    assert response.proposed_diff.count("<<<<<<< SEARCH") == 2

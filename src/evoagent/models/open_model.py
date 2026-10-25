@@ -103,10 +103,10 @@ class OpenAICompatibleModel(IModelBackend):
     def generate_repair_proposal(self, prompt: ModelPrompt) -> ModelResponse:
         """Call OpenAI-compatible chat completions endpoint."""
         url = f"{self.base_url}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
+        headers = {"Content-Type": "application/json"}
+        # Local servers (Ollama, llama.cpp) need no key; an empty "Bearer " header is rejected by httpx
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         payload = {
             "model": self.model_name,
             "messages": self.build_messages(prompt),
