@@ -21,6 +21,12 @@ def main() -> None:
         help="Run traces; preferred because they contain the full prompt the model saw",
     )
     parser.add_argument(
+        "--exclude-held-out",
+        nargs="*",
+        default=["benchmarks/split.json", "benchmarks/quixbugs/split.json"],
+        help="Benchmark split files whose held-out tasks are left out of the training data",
+    )
+    parser.add_argument(
         "--output-dir",
         default="data/training_splits",
         help="Directory to save JSONL dataset files",
@@ -40,9 +46,10 @@ def main() -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     sft_out = output_dir / "sft_dataset.jsonl"
-    rows = curator.export_dataset_jsonl(sft_out, trace_dir=trace_dir)
+    held_out = curator.held_out_task_ids(Path(f) for f in args.exclude_held_out)
+    rows = curator.export_dataset_jsonl(sft_out, trace_dir=trace_dir, exclude_tasks=held_out)
     dpo_out = output_dir / "dpo_dataset.jsonl"
-    pairs = curator.export_dpo_jsonl(dpo_out, trace_dir)
+    pairs = curator.export_dpo_jsonl(dpo_out, trace_dir, exclude_tasks=held_out)
 
     print(f"Exported {rows} SFT rows to {sft_out} and {pairs} DPO pairs to {dpo_out}")
 

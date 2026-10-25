@@ -5,7 +5,7 @@ Dataset curator: converts verified memory episodes into clean SFT and DPO traini
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Collection, Dict, Iterable, List, Optional, Set, Tuple
 from evoagent.memory.store import IMemoryStore
 from evoagent.models.base import ModelPrompt
 from evoagent.models.open_model import OpenAICompatibleModel
@@ -119,6 +119,15 @@ class DatasetCurator:
         return pairs
 
     @staticmethod
+    def held_out_task_ids(split_files: Iterable[Path]) -> Set[str]:
+        """Held-out task ids from benchmark split files; their traces must not become training data."""
+        ids: Set[str] = set()
+        for split_file in split_files:
+            if split_file.exists():
+                ids.update(json.loads(split_file.read_text(encoding="utf-8")).get("held_out_tasks", []))
+        return ids
+
+    @staticmethod
     def split_for_task(task_id: str, split_ratio: Tuple[float, float, float] = (0.8, 0.1, 0.1)) -> str:
         """Assign whole tasks to a split by a stable hash, so a task never appears in two splits."""
         bucket = int(hashlib.sha256(task_id.encode("utf-8")).hexdigest(), 16) % 1000 / 1000
@@ -161,14 +170,17 @@ class DatasetCurator:
         output_file: Path,
         split_ratio: Tuple[float, float, float] = (0.8, 0.1, 0.1),
         trace_dir: Optional[Path] = None,
+        exclude_tasks: Collection[str] = (),
     ) -> int:
         """
         Export the SFT dataset to JSONL and return the number of rows. Traces are preferred because
-        episodes lack the code context the model saw; episodes are the fallback.
+        episodes lack the code context the model saw; episodes are the fallback. Rows for
+        exclude_tasks (benchmark held-out tasks) are dropped.
         """
         sft_data = self.create_sft_from_traces(trace_dir) if trace_dir and trace_dir.exists() else []
         if not sft_data:
             sft_data = self.create_sft_dataset()
+        sft_data = [item for item in sft_data if item["task_id"] not in exclude_tasks]
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_file, "w", encoding="utf-8") as f:
@@ -177,9 +189,10 @@ class DatasetCurator:
                 f.write(json.dumps(item) + "\n")
         return len(sft_data)
 
-    def export_dpo_jsonl(self, output_file: Path, trace_dir: Path) -> int:
+    def export_dpo_jsonl(self, output_file: Path, trace_dir: Path, exclude_tasks: Collection[str] = ()) -> int:
         """Export trace-based preference pairs to JSONL and return the number of pairs."""
         pairs = self.create_dpo_from_traces(trace_dir) if trace_dir.exists() else []
+        pairs = [pair for pair in pairs if pair["task_id"] not in exclude_tasks]
         output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(output_file, "w", encoding="utf-8") as f:
             for pair in pairs:
