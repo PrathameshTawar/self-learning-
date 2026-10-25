@@ -46,7 +46,8 @@ graph TD
 3. **The sandbox runs in throwaway copies**: Tasks execute inside isolated temporary directories (`tempfile.TemporaryDirectory`). Accepted patches and failed attempts never pollute or corrupt the original benchmark or host repository.
 4. **Reliable patch format for small models**: Prefers exact `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` blocks. A SEARCH must match whole lines in exactly one place; ambiguous or missing matches are rejected and fed back to the next attempt. Unified diffs are applied hunk by hunk using their context lines.
 5. **Evidence-based learning**: Memory is built from the train split only and frozen while the held-out split (`benchmarks/split.json`) is evaluated, so a task can never retrieve its own solution. Strategy champions are promoted on held-out fitness, not the score they were selected with.
-6. **Traceable telemetry**: Every episode records the strategy ID, failure signature, patch, model hypothesis, outcome, and run telemetry (duration, attempts, patch validity, regression results). Every run also writes a JSON trace to `logs/traces/` with each attempt's full prompt, raw model output, patch, evaluation, and the feedback given to the next attempt. Prompts are deterministic: per-run noise such as pytest timings is stripped.
+6. **Fault localization**: The defective file is located from the failing test's traceback (deepest non-test frame) or, for assertion failures, from the modules the test imports. Benchmarks can be run with `--no-file-hints` to drop the `target_file` hint every task carries.
+7. **Traceable telemetry**: Every episode records the strategy ID, failure signature, patch, model hypothesis, outcome, and run telemetry (duration, attempts, patch validity, regression results). Every run also writes a JSON trace to `logs/traces/` with each attempt's full prompt, raw model output, patch, evaluation, and the feedback given to the next attempt. Prompts are deterministic: per-run noise such as pytest timings is stripped.
 
 ---
 
@@ -92,7 +93,7 @@ graph TD
 |  - Argument vector execution without shell=True                                   |
 |  - POSIX resource boundaries on CPU/memory where supported                        |
 |  - Timeouts kill the command's whole process tree                                 |
-|  - No network or filesystem isolation: run untrusted models inside a container    |
+|  - Optional Docker backend: no network, read-only root, only the workspace mounted |
 +-----------------------------------------------------------------------------------+
                                     |
                                     v
@@ -190,6 +191,25 @@ Every held-out task has a train task with the same defect class but different co
 
 Issue texts describe symptoms only, and task sources contain no hints about the fix.
 
+### QuixBugs Benchmark (40 tasks)
+`benchmarks/quixbugs/` holds the 40 [QuixBugs](https://github.com/jkoppel/QuixBugs) Python programs (MIT license) converted into EvoAgent tasks by `benchmarks/import_quixbugs.py`. Each task was checked to fail before and pass after QuixBugs' reference fix, which is not included. Defect classes are derived from the buggy-vs-correct diff, and the 24/16 split gives every held-out task a same-class train task.
+```powershell
+python benchmarks/run_benchmarks.py --benchmark-root benchmarks/quixbugs --eval-comparison --provider ollama --model qwen2.5-coder:1.5b --trials 3
+```
+
+### Useful Runner Flags
+- `--no-file-hints`: the agent must find the defective file itself.
+- `--sandbox docker`: run all candidate code in the container sandbox (see below).
+- `--request-timeout 300`: allow slow CPU-only inference (default 120 s, or `EVOAGENT_REQUEST_TIMEOUT_SECONDS`).
+- `--trace-dir DIR`: where per-attempt traces go (`""` disables them).
+
+### Container Sandbox
+For model-generated code, run tests in throwaway containers with no network and only the task workspace mounted:
+```powershell
+docker build -t evoagent-sandbox -f docker/sandbox.Dockerfile .
+python benchmarks/run_benchmarks.py --eval-comparison --sandbox docker   # or EVOAGENT_SANDBOX_BACKEND=docker
+```
+
 ---
 
 ## Results
@@ -243,7 +263,8 @@ ruff check src tests benchmarks
 │       │   └── test_tools.py     # Pytest execution & error extraction
 │       ├── sandbox/              # Process isolation & execution runners
 │       │   ├── interface.py
-│       │   └── local_runner.py   # Environment allowlisting & process sandbox
+│       │   ├── local_runner.py   # Environment allowlisting & process sandbox
+│       │   └── docker_runner.py  # Container sandbox (no network, workspace-only mount)
 │       ├── models/               # Pluggable inference backends
 │       │   ├── base.py
 │       │   ├── open_model.py     # OpenAI / Ollama / vLLM SEARCH/REPLACE backend
@@ -274,9 +295,13 @@ ruff check src tests benchmarks
 │           ├── genetic.py        # Strategy chromosome & genetic operators
 │           ├── evolution.py      # Tournament & generational strategy evaluation
 │           └── registry.py       # Versioned strategy registry with promotion gate
+├── docker/
+│   └── sandbox.Dockerfile        # Image for the container sandbox
 ├── benchmarks/                   # Benchmark suite & evaluation splits
 │   ├── split.json                # Fixed train vs. held-out task partition
 │   ├── run_benchmarks.py         # Multi-condition evaluation runner
+│   ├── import_quixbugs.py        # Converts QuixBugs into EvoAgent tasks
+│   ├── quixbugs/                 # 40 QuixBugs tasks, split, LICENSE (MIT)
 │   └── tasks/
 │       ├── bug_001_parser/       # [train] IndexError on empty input
 │       ├── bug_002_multifile/    # [train] AttributeError on None across service/validator
