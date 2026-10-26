@@ -82,12 +82,55 @@ class Settings(BaseSettings):
         description="PostgreSQL connection string if using postgres backend",
     )
 
+    # Embeddings for pgvector retrieval (postgres memory backend)
+    embedding_provider: Literal["hashing", "openai_compatible"] = Field(
+        default="hashing",
+        description="hashing: dependency-free feature hashing; openai_compatible: an /embeddings endpoint",
+    )
+    embedding_dim: int = Field(default=384, description="Vector size; fixed when the episodes table is created")
+    embedding_model: str = Field(default="nomic-embed-text", description="Model for openai_compatible embeddings")
+    embedding_base_url: str = Field(default="", description="Embeddings endpoint (defaults to api_base_url)")
+
+    # Remote workers & API (Milestone 5)
+    job_store_backend: Literal["memory", "postgres"] = Field(
+        default="memory",
+        description="Job records: memory (single process) or postgres (shared by API and workers)",
+    )
+    queue_backend: Literal["memory", "redis"] = Field(
+        default="memory",
+        description="Job dispatch: memory (single process) or redis (remote workers)",
+    )
+    redis_url: str = Field(default="redis://localhost:6379/0", description="Redis connection URL")
+    queue_name: str = Field(default="evoagent:jobs", description="Redis stream holding queued job ids")
+    queue_visibility_timeout_seconds: int = Field(
+        default=300,
+        description="A job whose worker sent no heartbeat for this long is handed to another worker",
+    )
+    queue_max_deliveries: int = Field(
+        default=3,
+        description="Deliveries before a job that keeps crashing its worker is marked as an error",
+    )
+    api_tokens: str = Field(default="", description="Comma-separated bearer tokens accepted by the API")
+    max_upload_bytes: int = Field(default=2_000_000, description="Largest inline repository a job may carry")
+    worker_allow_local_sandbox: bool = Field(
+        default=False,
+        description="Let workers run uploaded code without the docker sandbox (trusted callers only)",
+    )
+    worker_benchmark_roots: str = Field(
+        default="benchmarks",
+        description="Comma-separated directories that benchmark_task job references may point into",
+    )
+
     # Observability & Tracing
     log_level: str = Field(default="INFO", description="Console and trace log level")
     trace_dir: Path = Field(
         default=Path("logs/traces"),
         description="Directory for detailed task traces",
     )
+
+    @staticmethod
+    def split_list(value: str) -> list[str]:
+        return [item.strip() for item in value.split(",") if item.strip()]
 
     def ensure_directories(self) -> None:
         """Create necessary directories if they do not exist."""

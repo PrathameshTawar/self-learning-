@@ -1,0 +1,113 @@
+# EvoAgent production stack (Milestone 5): API, remote workers, PostgreSQL + pgvector, Redis.
+#
+#   docker build -t evoagent-sandbox -f docker/sandbox.Dockerfile .
+#   mkdir -p /tmp/evoagent-work && sudo chown 1000:1000 /tmp/evoagent-work
+#   export EVOAGENT_API_TOKENS=$(openssl rand -hex 24) POSTGRES_PASSWORD=$(openssl rand -hex 16)
+#   export DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+#   docker compose up -d --build --scale worker=2
+#
+# The model server runs on the host (e.g. Ollama on the GTX 1650); workers reach it through
+# host.docker.internal. Start the bundled Ollama instead with: docker compose --profile ollama up -d
+
+x-evoagent-env: &evoagent-env
+  EVOAGENT_DATABASE_URL: postgresql://evoagent:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/evoagent
+  EVOAGENT_REDIS_URL: redis://redis:6379/0
+  EVOAGENT_JOB_STORE_BACKEND: postgres
+  EVOAGENT_QUEUE_BACKEND: redis
+  EVOAGENT_MEMORY_BACKEND: postgres
+  EVOAGENT_EMBEDDING_PROVIDER: ${EVOAGENT_EMBEDDING_PROVIDER:-hashing}
+  EVOAGENT_EMBEDDING_DIM: ${EVOAGENT_EMBEDDING_DIM:-384}
+  EVOAGENT_LOG_LEVEL: ${EVOAGENT_LOG_LEVEL:-INFO}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: evoagent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: evoagent
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evoagent -d evoagent"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # Append-only persistence keeps queued and in-flight jobs across a Redis restart
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    image: evoagent-app
+    command: ["evoagent", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *evoagent-env
+      EVOAGENT_API_TOKENS: ${EVOAGENT_API_TOKENS:?set EVOAGENT_API_TOKENS}
+    # Loopback only; put a TLS-terminating reverse proxy in front to expose it
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  worker:
+    image: evoagent-app
+    command: ["evoagent", "worker"]
+    environment:
+      <<: *evoagent-env
+      EVOAGENT_MODEL_PROVIDER: ${EVOAGENT_MODEL_PROVIDER:-ollama}
+      EVOAGENT_MODEL_NAME: ${EVOAGENT_MODEL_NAME:-qwen2.5-coder:1.5b}
+      EVOAGENT_API_BASE_URL: ${EVOAGENT_API_BASE_URL:-http://host.docker.internal:11434/v1}
+      EVOAGENT_REQUEST_TIMEOUT_SECONDS: ${EVOAGENT_REQUEST_TIMEOUT_SECONDS:-300}
+      # Uploaded code only ever runs in throwaway sandbox containers with no network
+      EVOAGENT_SANDBOX_BACKEND: docker
+      EVOAGENT_SANDBOX_IMAGE: evoagent-sandbox:latest
+      # Sandbox containers are started by the host daemon, which mounts host paths: workspaces must
+      # live at the same path on the host and in this container
+      TMPDIR: /tmp/evoagent-work
+    volumes:
+      # Gives the worker control of the host Docker daemon (root-equivalent); see README "Security"
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/evoagent-work:/tmp/evoagent-work
+    group_add:
+      - "${DOCKER_GID:-999}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api: {condition: service_started}
+    # docker stop sends SIGTERM; the worker finishes its current job first
+    stop_grace_period: 15m
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  pgdata:
+  redisdata:
+  ollama:

@@ -35,6 +35,13 @@ class IMemoryStore(ABC):
         """Find past episodes matching a failure signature or exception type using BM25 ranking."""
         pass
 
+    def candidate_episodes(self, query: str, limit: int = 100) -> List[MemoryEpisodeRecord]:
+        """
+        Verified episodes worth ranking for `query`. Local stores return all of them; a large shared
+        store narrows them with an index first, so retrieval cost does not grow with memory size.
+        """
+        return self.get_accepted_episodes()
+
 
 class SQLiteMemoryStore(IMemoryStore):
     """Local SQLite-backed episodic memory with BM25 ranking."""

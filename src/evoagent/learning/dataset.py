@@ -2,13 +2,60 @@
 Dataset curator: converts verified memory episodes into clean SFT and DPO training sets.
 """
 
+from collections import Counter
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any, Collection, Dict, Iterable, List, Optional, Set, Tuple
 from evoagent.memory.store import IMemoryStore
 from evoagent.models.base import ModelPrompt
 from evoagent.models.open_model import OpenAICompatibleModel
+
+# Credentials that can end up in test output or source under repair. Training on them would let the
+# adapter reproduce them, so they are replaced before export.
+SECRET_PATTERNS = [
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{30,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{20,}"),
+]
+REDACTED = "[REDACTED]"
+
+
+def scrub_secrets(text: str) -> str:
+    """Replace credential-looking substrings with a placeholder."""
+    for pattern in SECRET_PATTERNS:
+        text = pattern.sub(lambda m: (m.group(1) if m.groups() else "") + REDACTED, text)
+    return text
+
+
+def _scrub_row(row: Dict[str, Any], fields: Iterable[str]) -> Dict[str, Any]:
+    row = dict(row)
+    for field in fields:
+        if isinstance(row.get(field), str):
+            row[field] = scrub_secrets(row[field])
+    if "messages" in row:
+        row["messages"] = [{**m, "content": scrub_secrets(m["content"])} for m in row["messages"]]
+    return row
+
+
+def _dedupe(rows: List[Dict[str, Any]], fields: Tuple[str, ...]) -> List[Dict[str, Any]]:
+    """Drop rows of a task whose fields repeat an earlier row of the same task. Repeated trials with
+    deterministic prompts produce identical examples, which would otherwise be over-weighted in training.
+    Rows are only merged within a task, because splits are assigned per task."""
+    seen: Set[str] = set()
+    unique = []
+    for row in rows:
+        key = hashlib.sha256(json.dumps([row["task_id"]] + [row.get(f) for f in fields]).encode("utf-8")).hexdigest()
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+    return unique
 
 
 class DatasetCurator:
@@ -181,6 +228,7 @@ class DatasetCurator:
         if not sft_data:
             sft_data = self.create_sft_dataset()
         sft_data = [item for item in sft_data if item["task_id"] not in exclude_tasks]
+        sft_data = _dedupe([_scrub_row(item, ("prompt", "completion")) for item in sft_data], ("prompt", "completion"))
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_file, "w", encoding="utf-8") as f:
@@ -193,9 +241,42 @@ class DatasetCurator:
         """Export trace-based preference pairs to JSONL and return the number of pairs."""
         pairs = self.create_dpo_from_traces(trace_dir) if trace_dir.exists() else []
         pairs = [pair for pair in pairs if pair["task_id"] not in exclude_tasks]
+        pairs = _dedupe(
+            [_scrub_row(pair, ("prompt", "chosen", "rejected")) for pair in pairs], ("prompt", "chosen", "rejected")
+        )
         output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(output_file, "w", encoding="utf-8") as f:
             for pair in pairs:
                 pair["split"] = self.split_for_task(pair["task_id"])
                 f.write(json.dumps(pair) + "\n")
         return len(pairs)
+
+    @staticmethod
+    def write_manifest(
+        manifest_file: Path, dataset_files: Iterable[Path], excluded_tasks: Collection[str] = ()
+    ) -> Dict[str, Any]:
+        """
+        Record what an export contains: rows and tasks per split, file hashes, and how many held-out
+        tasks were excluded. Training reads it to refuse a dataset that changed after export.
+        """
+        files = {}
+        for path in dataset_files:
+            if not path.exists():
+                continue
+            rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            files[path.name] = {
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "rows": len(rows),
+                "rows_per_split": dict(Counter(row.get("split", "train") for row in rows)),
+                "tasks_per_split": {
+                    split: len({row["task_id"] for row in rows if row.get("split", "train") == split})
+                    for split in sorted({row.get("split", "train") for row in rows})
+                },
+            }
+        manifest = {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "excluded_held_out_tasks": len(excluded_tasks),
+            "files": files,
+        }
+        manifest_file.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        return manifest

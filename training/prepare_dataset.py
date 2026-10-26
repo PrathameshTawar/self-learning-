@@ -50,6 +50,7 @@ def main() -> None:
     rows = curator.export_dataset_jsonl(sft_out, trace_dir=trace_dir, exclude_tasks=held_out)
     dpo_out = output_dir / "dpo_dataset.jsonl"
     pairs = curator.export_dpo_jsonl(dpo_out, trace_dir, exclude_tasks=held_out)
+    curator.write_manifest(output_dir / "manifest.json", [sft_out, dpo_out], held_out)
 
     print(f"Exported {rows} SFT rows to {sft_out} and {pairs} DPO pairs to {dpo_out}")
 

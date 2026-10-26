@@ -65,7 +65,7 @@ def test_export_keeps_each_task_in_a_single_split(tmp_path: Path):
     store = InMemoryMemoryStore()
     curator = DatasetCurator(store)
     out = tmp_path / "sft.jsonl"
-    rows = [{"task_id": f"task-{i % 3}", "prompt": "p", "completion": "c"} for i in range(30)]
+    rows = [{"task_id": f"task-{i % 3}", "prompt": "p", "completion": f"c{i}"} for i in range(30)]
     curator.create_sft_dataset = lambda: rows
 
     assert curator.export_dataset_jsonl(out) == 30

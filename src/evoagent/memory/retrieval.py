@@ -68,7 +68,7 @@ class ExperienceRetriever:
 
         # Only verified repairs become lessons. A failed episode records no fix, only that it failed;
         # in real runs those "caution" entries reached every prompt without adding information.
-        episodes = self.ranker.rank(query, self.memory_store.get_accepted_episodes(), limit=max_results)
+        episodes = self.ranker.rank(query, self.memory_store.candidate_episodes(query), limit=max_results)
         return [
             f"[Task {ep.task_id} (Resolved)]: {ep.lessons_learned} (Fix applied: {summarize_fix(ep.applied_patch)})"
             for ep in episodes
